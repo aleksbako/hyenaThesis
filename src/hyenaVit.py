@@ -1,4 +1,4 @@
-from HyenaOperator import HyenaOperator
+from Hyena.HyenaOperator import HyenaOperator
 import torchvision
 import torch.nn as nn
 class HyenaVit(nn.Module):
