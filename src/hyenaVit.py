@@ -1,8 +1,9 @@
 from Hyena.HyenaOperator import HyenaOperator
 import torchvision
 import torch.nn as nn
+import torch.nn.functional as F
 class HyenaVit(nn.Module):
-    def __init__(self, classNumber=100):
+    def __init__(self, classNumber=257):
         super(HyenaVit, self).__init__()
         self.ViT = torchvision.models.vit_b_16(pretrained=False).to("cuda")
         # Replace the attention layers with HyenaOperator
@@ -22,4 +23,6 @@ class HyenaVit(nn.Module):
 
     def forward(self, x):
         x = self.ViT(x)
-        return self.new_head(x)
+        x = self.new_head(x)
+        x = F.relu(x)
+        return x

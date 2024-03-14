@@ -3,13 +3,14 @@ import torchvision
 import torch.nn as nn
 import tqdm
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader , random_split
 from datetime import datetime
 from HyenaOperator import HyenaOperator
 from hyenaVit import HyenaVit
 import numpy as np
 import torch.nn.init as init
 from ModifiedVit import ModifiedVit
+from dataloaders.dataset.caltech256 import Caltech256Dataset
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
         init.trunc_normal_(module.weight, std=0.02)
@@ -40,7 +41,9 @@ def train(model, dataloader, loss, optimizer, warmup_epochs=5):
                 label = data[1].to("cuda")
 
                 pred_label = model(image)
+        
                 current_loss = loss(pred_label, label)
+                
                 current_loss.backward()
                 optimizer.step()
                 current_losses.append(np.mean(current_loss.item()))
@@ -75,10 +78,11 @@ def validate(model, dataloader, loss):
 
 if __name__ == "__main__":
     baseline = torchvision.models.vit_b_16(pretrained=False).to("cuda")
-    ViT = ModifiedVit(baseline, 100).to("cuda")
+    ViT = ModifiedVit(baseline, 257).to("cuda")
     ViT.apply(init_weights)
-
-
+    
+    root_dir = "../data/256_ObjectCategories/"
+    
     lr = (10**(-3))
     loss = nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(ViT.parameters(), lr=lr,weight_decay=0.05)
@@ -89,9 +93,15 @@ if __name__ == "__main__":
          transforms.Resize((224,224))
     ]
     )
-    data = torchvision.datasets.CIFAR100("../data/", download=False, transform=transform,)
-    train_dataloader = DataLoader(data,batch_size=batch_size, shuffle=True)
-    
+
+    cal_dataset = Caltech256Dataset("../data/256_ObjectCategories/",transform)
+    train_size = int(0.8 * len(cal_dataset))
+    val_size = len(cal_dataset) - train_size
+
+    train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(24))
+    train_dataloader = DataLoader(train_dataset,batch_size=batch_size)
+
+
     try:
         model = torch.load("../output/model.pt")
     
@@ -119,13 +129,9 @@ if __name__ == "__main__":
         print('Hyena ViT Duration: {}'.format(end_time - start_time))
         torch.save(model_hyena,"../output/hyena_model.pt")
 
-    named_modules_copy = dict(model_hyena.named_modules())
-    for name, module in named_modules_copy.items():
-        if isinstance(module, HyenaOperator):
-            print(module)
-    
-    val_data = torchvision.datasets.CIFAR100("../data/", train=False, download=False, transform=transform)
-    val_dataloader = DataLoader(val_data, batch_size=batch_size)
+ 
+
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
     validate(model, val_dataloader, loss)
     validate(model_hyena, val_dataloader, hyenaLoss)
  
