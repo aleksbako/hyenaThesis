@@ -1,14 +1,6 @@
 import torch
 import torchvision
 import torch.nn as nn
-import tqdm
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
-from datetime import datetime
-from HyenaOperator import HyenaOperator
-from hyenaVit import HyenaVit
-import numpy as np
-import torch.nn.init as init
 import torch.nn.functional as F
 
 class ModifiedVit(nn.Module):

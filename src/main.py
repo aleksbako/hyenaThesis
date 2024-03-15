@@ -6,11 +6,12 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader , random_split
 from datetime import datetime
 from HyenaOperator import HyenaOperator
-from hyenaVit import HyenaVit
+from models.hyenaVit import HyenaVit
 import numpy as np
 import torch.nn.init as init
-from ModifiedVit import ModifiedVit
+from models.ModifiedVit import ModifiedVit
 from dataloaders.dataset.caltech256 import Caltech256Dataset
+
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
         init.trunc_normal_(module.weight, std=0.02)
