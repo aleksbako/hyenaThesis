@@ -154,7 +154,7 @@ if __name__ == "__main__":
     model_type = "model"
     weight_decay = 0.05
 
-    model = get_model(ViT, model_type, train_dataloader, lr, weight_decay, epochs)
+    model = get_model(ViT, model_type, train_dataloader,loss, lr, weight_decay, epochs)
 
     hyena_ViT = HyenaVit().to("cuda")   
     hyena_ViT.apply(init_weights)
