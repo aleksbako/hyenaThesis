@@ -39,7 +39,7 @@ def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkp
         if epoch < warmup_epochs:
             lr = lr_init + (lr_max - lr_init) * epoch / warmup_epochs
         else:
-            lr = lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos((epoch - warmup_epochs) * np.pi / (16 - warmup_epochs)))
+            lr = lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos((epoch - warmup_epochs) * np.pi / (epochs - warmup_epochs)))
 
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
