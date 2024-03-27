@@ -4,8 +4,8 @@ import torch.nn as nn
 import tqdm
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader , random_split
-from datetime import datetime, timedelta
-
+from datetime import  timedelta
+from sklearn.metrics import accuracy_score
 from HyenaOperator import HyenaOperator
 from models.hyenaVit import HyenaVit
 import numpy as np
@@ -14,23 +14,25 @@ from models.ModifiedVit import ModifiedVit
 from dataloaders.dataset.caltech256 import Caltech256Dataset
 import time
 
+
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
         init.trunc_normal_(module.weight, std=0.02)
         if module.bias is not None:
             init.constant_(module.bias, 0)
 
-def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkpoint_interval=1, epochs=32, start_epoch=0, total_training_time=0):
+def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkpoint_interval=1, epochs=32, start_epoch=0, epoch_times=[], mean_loss=[], mean_accuracy=[]):
     lr_init = optimizer.param_groups[0]['lr']
     lr_max = lr_init
     lr_min = lr_max / 10
-
+    
 
     model.train()
 
     for epoch in range(start_epoch, epochs):
         current_losses = []
-       
+        correct_predictions = 0
+        total_samples = 0
         start_time = time.time()
 
         # Calculate learning rate for the current epoch
@@ -52,15 +54,21 @@ def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkp
 
             current_loss = loss(pred_label, label)
 
+            _, predicted = torch.max(pred_label, 1)
+            correct_predictions += (predicted == label).sum().item()
+            total_samples += label.size(0)
+
             current_loss.backward()
             optimizer.step()
             current_losses.append(np.mean(current_loss.item()))
 
         end_time = time.time()
         epoch_training_time = end_time - start_time
-        total_training_time += epoch_training_time
+        epoch_times.append(epoch_training_time)
+        mean_accuracy.append(correct_predictions / total_samples * 100)
+        mean_loss.append(np.mean(current_losses))
 
-        print(f"{epoch}. epoch completed during training process with avg loss : {np.mean(current_losses)}, Total Training Time: {str(timedelta(seconds=total_training_time))}")
+        print(f"{epoch}. epoch completed during training process with avg losses : {np.mean(mean_loss)},avg accuracies: {np.mean(mean_accuracy)} Total Training Time: {str(timedelta(seconds=np.sum(epoch_times)))}")
 
        
         if epoch % checkpoint_interval == 0:
@@ -68,7 +76,10 @@ def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkp
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'total_training_time': total_training_time
+                'epoch_times': epoch_times,
+                'mean_accuracy': mean_accuracy,
+                'mean_loss': mean_loss,
+
             }, f"../output/{model_type}_checkpoint.pt")
 
     return model
@@ -84,20 +95,21 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
         
         start_epoch = checkpoint['epoch'] + 1
-        total_training_time = checkpoint['total_training_time']
-      
-
+        epoch_times = checkpoint['epoch_times']
+        mean_accuracy = checkpoint['mean_accuracy']
+        mean_loss = checkpoint['mean_loss']
     
     except:
         start_epoch = 0
         model = baseline_model
         optim = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay=weight_decay)
-        total_training_time =0
-        
+        epoch_times = []
+        mean_accuracy = []
+        mean_loss = []
 
     if start_epoch < epochs:
         
-        model = train(model,train_dataloader,loss,optim,model_type, epochs=epochs, start_epoch=start_epoch , total_training_time=total_training_time)
+        model = train(model,train_dataloader,loss,optim,model_type, epochs=epochs, start_epoch=start_epoch , epoch_times=epoch_times, mean_loss=mean_loss, mean_accuracy=mean_accuracy)
     
     return model
     
