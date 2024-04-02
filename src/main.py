@@ -74,7 +74,7 @@ def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkp
         if epoch % checkpoint_interval == 0:
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model': model,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'epoch_times': epoch_times,
                 'mean_accuracy': mean_accuracy,
@@ -89,17 +89,16 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
     try:
         checkpoint = torch.load(f"../output/{model_type}_checkpoint.pt")
         start_epoch = checkpoint['epoch']
-        model = baseline_model
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optim = torch.optim.AdamW(ViT.parameters(), lr=lr,weight_decay=weight_decay)
+        model = checkpoint['model'].to('cuda')
+        optim = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay=weight_decay)
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
         
         start_epoch = checkpoint['epoch'] + 1
         epoch_times = checkpoint['epoch_times']
         mean_accuracy = checkpoint['mean_accuracy']
         mean_loss = checkpoint['mean_loss']
-    
-    except:
+
+    except Exception as e:
         start_epoch = 0
         model = baseline_model
         optim = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay=weight_decay)
@@ -175,6 +174,7 @@ if __name__ == "__main__":
     heyena_weight_decay = 0.01
 
     model_type = "hyena"
+    
 
     model_hyena = get_model(hyena_ViT, model_type, train_dataloader, hyenaLoss, hyenaLr, heyena_weight_decay, epochs)
 
