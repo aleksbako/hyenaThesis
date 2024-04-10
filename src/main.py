@@ -231,9 +231,9 @@ if __name__ == "__main__":
     model_hyena = get_model(hyena_ViT, model_type, train_dataloader, hyenaLoss, hyenaLr, heyena_weight_decay, epochs)
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-    validate(model, val_dataloader, loss)
-    validate(model_hyena, val_dataloader, hyenaLoss)
-    plot_metrics(model, model_hyena, output_dir="../output/")
+   # validate(model, val_dataloader, loss)
+   # validate(model_hyena, val_dataloader, hyenaLoss)
+    plot_metrics( output_dir="../output/")
 
 
     
