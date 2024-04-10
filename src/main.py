@@ -127,8 +127,8 @@ def plot_metrics(output_dir="../output/"):
 
         # Plot Mean Accuracy
         plt.subplot(1, 3, 1)
-        plt.plot(model1_checkpoint['mean_accuracy'], label='Model 1')
-        plt.plot(model2_checkpoint['mean_accuracy'], label='Model 2')
+        plt.plot(model1_checkpoint['mean_accuracy'], label='ViT')
+        plt.plot(model2_checkpoint['mean_accuracy'], label='HyenaViT')
         plt.xlabel('Epochs')
         plt.ylabel('Mean Accuracy')
         plt.title('Mean Accuracy Comparison')
@@ -139,8 +139,8 @@ def plot_metrics(output_dir="../output/"):
         # Plot Mean Loss
         plt.figure(figsize=(15, 5))
         plt.subplot(1, 3, 1)
-        plt.plot(model1_checkpoint['mean_loss'], label='Model 1')
-        plt.plot(model2_checkpoint['mean_loss'], label='Model 2')
+        plt.plot(model1_checkpoint['mean_loss'], label='ViT')
+        plt.plot(model2_checkpoint['mean_loss'], label='HyenaViT')
         plt.xlabel('Epochs')
         plt.ylabel('Mean Loss')
         plt.title('Mean Loss Comparison')
@@ -151,8 +151,8 @@ def plot_metrics(output_dir="../output/"):
         # Plot Epoch Times
         plt.figure(figsize=(15, 5))
         plt.subplot(1, 3, 1)
-        plt.plot(model1_epoch_times_cumulative, label='Model 1')
-        plt.plot(model2_epoch_times_cumulative, label='Model 2')
+        plt.plot(model1_epoch_times_cumulative, label='ViT')
+        plt.plot(model2_epoch_times_cumulative, label='HyenaViT')
         plt.xlabel('Epochs')
         plt.ylabel('Cumulative Epoch Time (s)')
         plt.title('Cumulative Epoch Time Comparison')
