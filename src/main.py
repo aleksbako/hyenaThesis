@@ -116,6 +116,10 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
 def plot_metrics(model1_checkpoint, model2_checkpoint, output_dir="../output/"):
     plt.figure(figsize=(15, 5))
 
+    # Adjust epoch times to be cumulative
+    model1_epoch_times_cumulative = [sum(model1_checkpoint['epoch_times'][:i+1]) for i in range(len(model1_checkpoint['epoch_times']))]
+    model2_epoch_times_cumulative = [sum(model2_checkpoint['epoch_times'][:i+1]) for i in range(len(model2_checkpoint['epoch_times']))]
+
     # Plot Mean Accuracy
     plt.subplot(1, 3, 1)
     plt.plot(model1_checkpoint['mean_accuracy'], label='Model 1')
@@ -142,13 +146,13 @@ def plot_metrics(model1_checkpoint, model2_checkpoint, output_dir="../output/"):
     # Plot Epoch Times
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 1)
-    plt.plot(model1_checkpoint['epoch_times'], label='Model 1')
-    plt.plot(model2_checkpoint['epoch_times'], label='Model 2')
+    plt.plot(model1_epoch_times_cumulative, label='Model 1')
+    plt.plot(model2_epoch_times_cumulative, label='Model 2')
     plt.xlabel('Epochs')
-    plt.ylabel('Epoch Time (s)')
-    plt.title('Epoch Time Comparison')
+    plt.ylabel('Cumulative Epoch Time (s)')
+    plt.title('Cumulative Epoch Time Comparison')
     plt.legend()
-    plt.savefig(output_dir + 'epoch_time_comparison.png')
+    plt.savefig(output_dir + 'cumulative_epoch_time_comparison.png')
     plt.close()
     
 
