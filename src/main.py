@@ -113,47 +113,54 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
     
     return model
 
-def plot_metrics(model1_checkpoint, model2_checkpoint, output_dir="../output/"):
-    plt.figure(figsize=(15, 5))
+def plot_metrics(output_dir="../output/"):
+    
+    try:
+        plt.figure(figsize=(15, 5))
+        model1_checkpoint = torch.load(f"../output/model_checkpoint.pt")
+        
+        model2_checkpoint = torch.load(f"../output/hyena_checkpoint.pt")
 
-    # Adjust epoch times to be cumulative
-    model1_epoch_times_cumulative = [sum(model1_checkpoint['epoch_times'][:i+1]) for i in range(len(model1_checkpoint['epoch_times']))]
-    model2_epoch_times_cumulative = [sum(model2_checkpoint['epoch_times'][:i+1]) for i in range(len(model2_checkpoint['epoch_times']))]
+        # Adjust epoch times to be cumulative
+        model1_epoch_times_cumulative = [sum(model1_checkpoint['epoch_times'][:i+1]) for i in range(len(model1_checkpoint['epoch_times']))]
+        model2_epoch_times_cumulative = [sum(model2_checkpoint['epoch_times'][:i+1]) for i in range(len(model2_checkpoint['epoch_times']))]
 
-    # Plot Mean Accuracy
-    plt.subplot(1, 3, 1)
-    plt.plot(model1_checkpoint['mean_accuracy'], label='Model 1')
-    plt.plot(model2_checkpoint['mean_accuracy'], label='Model 2')
-    plt.xlabel('Epochs')
-    plt.ylabel('Mean Accuracy')
-    plt.title('Mean Accuracy Comparison')
-    plt.legend()
-    plt.savefig(output_dir + 'mean_accuracy_comparison.png')
-    plt.close()
+        # Plot Mean Accuracy
+        plt.subplot(1, 3, 1)
+        plt.plot(model1_checkpoint['mean_accuracy'], label='Model 1')
+        plt.plot(model2_checkpoint['mean_accuracy'], label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Mean Accuracy')
+        plt.title('Mean Accuracy Comparison')
+        plt.legend()
+        plt.savefig(output_dir + 'mean_accuracy_comparison.png')
+        plt.close()
 
-    # Plot Mean Loss
-    plt.figure(figsize=(15, 5))
-    plt.subplot(1, 3, 1)
-    plt.plot(model1_checkpoint['mean_loss'], label='Model 1')
-    plt.plot(model2_checkpoint['mean_loss'], label='Model 2')
-    plt.xlabel('Epochs')
-    plt.ylabel('Mean Loss')
-    plt.title('Mean Loss Comparison')
-    plt.legend()
-    plt.savefig(output_dir + 'mean_loss_comparison.png')
-    plt.close()
+        # Plot Mean Loss
+        plt.figure(figsize=(15, 5))
+        plt.subplot(1, 3, 1)
+        plt.plot(model1_checkpoint['mean_loss'], label='Model 1')
+        plt.plot(model2_checkpoint['mean_loss'], label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Mean Loss')
+        plt.title('Mean Loss Comparison')
+        plt.legend()
+        plt.savefig(output_dir + 'mean_loss_comparison.png')
+        plt.close()
 
-    # Plot Epoch Times
-    plt.figure(figsize=(15, 5))
-    plt.subplot(1, 3, 1)
-    plt.plot(model1_epoch_times_cumulative, label='Model 1')
-    plt.plot(model2_epoch_times_cumulative, label='Model 2')
-    plt.xlabel('Epochs')
-    plt.ylabel('Cumulative Epoch Time (s)')
-    plt.title('Cumulative Epoch Time Comparison')
-    plt.legend()
-    plt.savefig(output_dir + 'cumulative_epoch_time_comparison.png')
-    plt.close()
+        # Plot Epoch Times
+        plt.figure(figsize=(15, 5))
+        plt.subplot(1, 3, 1)
+        plt.plot(model1_epoch_times_cumulative, label='Model 1')
+        plt.plot(model2_epoch_times_cumulative, label='Model 2')
+        plt.xlabel('Epochs')
+        plt.ylabel('Cumulative Epoch Time (s)')
+        plt.title('Cumulative Epoch Time Comparison')
+        plt.legend()
+        plt.savefig(output_dir + 'cumulative_epoch_time_comparison.png')
+        plt.close()
+    except:
+        print("error when plotting")
     
 
 def validate(model, dataloader, loss):
@@ -180,6 +187,8 @@ def validate(model, dataloader, loss):
     accuracy = correct_predictions / total_samples * 100
 
     print(f"Validation Loss: {average_loss:.4f}, Accuracy: {accuracy:.2f}%")
+
+
 
 if __name__ == "__main__":
     baseline = torchvision.models.vit_b_16(pretrained=False).to("cuda")
@@ -225,6 +234,7 @@ if __name__ == "__main__":
     validate(model, val_dataloader, loss)
     validate(model_hyena, val_dataloader, hyenaLoss)
     plot_metrics(model, model_hyena, output_dir="../output/")
+
 
     
     
