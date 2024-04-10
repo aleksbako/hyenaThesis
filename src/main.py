@@ -9,6 +9,7 @@ from sklearn.metrics import accuracy_score
 from HyenaOperator import HyenaOperator
 from models.hyenaVit import HyenaVit
 import numpy as np
+import matplotlib.pyplot as plt
 import torch.nn.init as init
 from models.ModifiedVit import ModifiedVit
 from dataloaders.dataset.caltech256 import Caltech256Dataset
@@ -111,6 +112,44 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
         model = train(model,train_dataloader,loss,optim,model_type, epochs=epochs, start_epoch=start_epoch , epoch_times=epoch_times, mean_loss=mean_loss, mean_accuracy=mean_accuracy)
     
     return model
+
+def plot_metrics(model1_checkpoint, model2_checkpoint, output_dir="../output/"):
+    plt.figure(figsize=(15, 5))
+
+    # Plot Mean Accuracy
+    plt.subplot(1, 3, 1)
+    plt.plot(model1_checkpoint['mean_accuracy'], label='Model 1')
+    plt.plot(model2_checkpoint['mean_accuracy'], label='Model 2')
+    plt.xlabel('Epochs')
+    plt.ylabel('Mean Accuracy')
+    plt.title('Mean Accuracy Comparison')
+    plt.legend()
+    plt.savefig(output_dir + 'mean_accuracy_comparison.png')
+    plt.close()
+
+    # Plot Mean Loss
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 1)
+    plt.plot(model1_checkpoint['mean_loss'], label='Model 1')
+    plt.plot(model2_checkpoint['mean_loss'], label='Model 2')
+    plt.xlabel('Epochs')
+    plt.ylabel('Mean Loss')
+    plt.title('Mean Loss Comparison')
+    plt.legend()
+    plt.savefig(output_dir + 'mean_loss_comparison.png')
+    plt.close()
+
+    # Plot Epoch Times
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 1)
+    plt.plot(model1_checkpoint['epoch_times'], label='Model 1')
+    plt.plot(model2_checkpoint['epoch_times'], label='Model 2')
+    plt.xlabel('Epochs')
+    plt.ylabel('Epoch Time (s)')
+    plt.title('Epoch Time Comparison')
+    plt.legend()
+    plt.savefig(output_dir + 'epoch_time_comparison.png')
+    plt.close()
     
 
 def validate(model, dataloader, loss):
@@ -181,7 +220,7 @@ if __name__ == "__main__":
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
     validate(model, val_dataloader, loss)
     validate(model_hyena, val_dataloader, hyenaLoss)
- 
+    plot_metrics(model, model_hyena, output_dir="../output/")
 
     
     
