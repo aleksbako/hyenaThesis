@@ -14,7 +14,8 @@ import torch.nn.init as init
 from models.ModifiedVit import ModifiedVit
 from dataloaders.dataset.caltech256 import Caltech256Dataset
 import time
-
+from models.SimpleViT import SimpleViT
+from models.SimpleHyenaViT import SimpleHyenaViT
 
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
@@ -23,9 +24,6 @@ def init_weights(module):
             init.constant_(module.bias, 0)
 
 def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkpoint_interval=1, epochs=32, start_epoch=0, epoch_times=[], mean_loss=[], mean_accuracy=[]):
-    lr_init = optimizer.param_groups[0]['lr']
-    lr_max = lr_init
-    lr_min = lr_max / 10
     
 
     model.train()
@@ -36,14 +34,7 @@ def train(model, dataloader, loss, optimizer,model_type, warmup_epochs=5, checkp
         total_samples = 0
         start_time = time.time()
 
-        # Calculate learning rate for the current epoch
-        if epoch < warmup_epochs:
-            lr = lr_init + (lr_max - lr_init) * epoch / warmup_epochs
-        else:
-            lr = lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos((epoch - warmup_epochs) * np.pi / (epochs - warmup_epochs)))
 
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
         for data in tqdm.tqdm(dataloader):
             optimizer.zero_grad()
 
@@ -91,7 +82,7 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
         checkpoint = torch.load(f"../output/{model_type}_checkpoint.pt")
         start_epoch = checkpoint['epoch']
         model = checkpoint['model'].to('cuda')
-        optim = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay=weight_decay)
+        optim = torch.optim.AdamW(model.parameters(), lr=lr)
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
         
         start_epoch = checkpoint['epoch'] + 1
@@ -102,7 +93,7 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
     except Exception as e:
         start_epoch = 0
         model = baseline_model
-        optim = torch.optim.AdamW(model.parameters(), lr=lr,weight_decay=weight_decay)
+        optim = torch.optim.AdamW(model.parameters(), lr=lr)
         epoch_times = []
         mean_accuracy = []
         mean_loss = []
@@ -191,13 +182,10 @@ def validate(model, dataloader, loss):
 
 
 if __name__ == "__main__":
-    baseline = torchvision.models.vit_b_16(pretrained=False).to("cuda")
-    ViT = ModifiedVit(baseline, 257).to("cuda")
-    ViT.apply(init_weights)
-    
+
     root_dir = "../data/256_ObjectCategories/"
     epochs = 32
-    lr = (10**(-3))
+    lr = (10**(-5))
     loss = nn.CrossEntropyLoss()
 
     
@@ -216,13 +204,31 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_dataset,batch_size=batch_size)
     model_type = "model"
     weight_decay = 0.05
+    
+    baseline = torchvision.models.vit_b_16(pretrained=False).to("cuda")
+    ViT = SimpleViT(image_size = 224,
+    patch_size = 16,
+    num_classes = 257,
+    dim = 1024,
+    depth = 6,
+    heads = 16,
+    mlp_dim = 2048).to('cuda')
+    ViT.apply(init_weights)
+    
+
 
     model = get_model(ViT, model_type, train_dataloader,loss, lr, weight_decay, epochs)
-
-    hyena_ViT = HyenaVit().to("cuda")   
+    
+    hyena_ViT =  SimpleHyenaViT(image_size = 224,
+    patch_size = 16,
+    num_classes = 257,
+    dim = 1024,
+    depth = 6,
+    heads = 16,
+    mlp_dim = 2048).to('cuda')   
     hyena_ViT.apply(init_weights)
     hyenaLoss = nn.CrossEntropyLoss()
-    hyenaLr=2*(10**(-4))
+    hyenaLr=1*(10**(-5))
     heyena_weight_decay = 0.01
 
     model_type = "hyena"
@@ -231,8 +237,8 @@ if __name__ == "__main__":
     model_hyena = get_model(hyena_ViT, model_type, train_dataloader, hyenaLoss, hyenaLr, heyena_weight_decay, epochs)
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-   # validate(model, val_dataloader, loss)
-   # validate(model_hyena, val_dataloader, hyenaLoss)
+    validate(model, val_dataloader, loss)
+    validate(model_hyena, val_dataloader, hyenaLoss)
     plot_metrics( output_dir="../output/")
 
 
