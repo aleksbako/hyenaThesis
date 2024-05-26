@@ -82,7 +82,7 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
         checkpoint = torch.load(f"../output/{model_type}_checkpoint.pt")
         start_epoch = checkpoint['epoch']
         model = checkpoint['model'].to('cuda')
-        optim = torch.optim.AdamW(model.parameters(), lr=lr)
+        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
         
         start_epoch = checkpoint['epoch'] + 1
@@ -93,7 +93,7 @@ def get_model(baseline_model, model_type, train_dataloader,loss, lr, weight_deca
     except Exception as e:
         start_epoch = 0
         model = baseline_model
-        optim = torch.optim.AdamW(model.parameters(), lr=lr)
+        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         epoch_times = []
         mean_accuracy = []
         mean_loss = []
@@ -152,6 +152,29 @@ def plot_metrics(output_dir="../output/"):
         plt.close()
     except:
         print("error when plotting")
+
+
+
+def GetMedianTime(output_dir="../output/"):
+    
+    try:
+
+        model1_checkpoint = torch.load(f"../output/model_checkpoint.pt")
+        
+        model2_checkpoint = torch.load(f"../output/hyena_checkpoint.pt")
+
+        print(f"Min time spent for ViT model : {np.min(model1_checkpoint['epoch_times'])}")
+        print(f"Min time spent for Hyena ViT model : {np.min(model2_checkpoint['epoch_times'])}")
+        # Adjust epoch times to be cumulative
+        print(f"Median time spent for ViT model : {np.median(model1_checkpoint['epoch_times'])}")
+        print(f"Median time spent for Hyena ViT model : {np.median(model2_checkpoint['epoch_times'])}")
+      #  model2_epoch_times_cumulative = [sum(model2_checkpoint['epoch_times'][:i+1]) for i in range(len(model2_checkpoint['epoch_times']))]
+        print(f"Max time spent for ViT model : {np.max(model1_checkpoint['epoch_times'])}")
+        print(f"Max time spent for Hyena ViT model : {np.max(model2_checkpoint['epoch_times'])}")
+    except:
+        print("error when fetching  epoch time data")
+    
+
     
 
 def validate(model, dataloader, loss):
@@ -184,8 +207,8 @@ def validate(model, dataloader, loss):
 if __name__ == "__main__":
 
     root_dir = "../data/256_ObjectCategories/"
-    epochs = 32
-    lr = (10**(-5))
+    epochs = 64
+    lr = (10**(-6))
     loss = nn.CrossEntropyLoss()
 
     
@@ -200,7 +223,7 @@ if __name__ == "__main__":
     train_size = int(0.8 * len(cal_dataset))
     val_size = len(cal_dataset) - train_size
 
-    train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(24))
+    train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(42))
     train_dataloader = DataLoader(train_dataset,batch_size=batch_size)
     model_type = "model"
     weight_decay = 0.05
@@ -228,8 +251,8 @@ if __name__ == "__main__":
     mlp_dim = 2048).to('cuda')   
     hyena_ViT.apply(init_weights)
     hyenaLoss = nn.CrossEntropyLoss()
-    hyenaLr=1*(10**(-5))
-    heyena_weight_decay = 0.01
+    hyenaLr=2*(10**(-6))
+    heyena_weight_decay = 0.05
 
     model_type = "hyena"
     
@@ -237,9 +260,11 @@ if __name__ == "__main__":
     model_hyena = get_model(hyena_ViT, model_type, train_dataloader, hyenaLoss, hyenaLr, heyena_weight_decay, epochs)
 
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-    validate(model, val_dataloader, loss)
     validate(model_hyena, val_dataloader, hyenaLoss)
+    validate(model, val_dataloader, loss)
+    
     plot_metrics( output_dir="../output/")
+    GetMedianTime()
 
 
     
