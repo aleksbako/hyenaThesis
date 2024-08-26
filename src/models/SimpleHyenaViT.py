@@ -39,7 +39,7 @@ class FeedForward(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim,l_max,filter_order,dropout,filter_dropout):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
@@ -48,9 +48,11 @@ class Transformer(nn.Module):
                # Attention(dim, heads = heads, dim_head = dim_head),
                HyenaOperator(
                    dim,  
-                        l_max=196,  # You can adjust this value according to your requirements
+                        l_max=l_max,  # You can adjust this value according to your requirements
                     order=2,  # You can adjust this value according to your requirements
-                    filter_order=64),
+                      filter_order=filter_order,
+                    dropout=dropout,
+                    filter_dropout=filter_dropout),
                 FeedForward(dim, mlp_dim)
             ]))
     def forward(self, x):
@@ -60,7 +62,7 @@ class Transformer(nn.Module):
         return self.norm(x)
 
 class SimpleHyenaViT(nn.Module):
-    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, channels = 3, dim_head = 64):
+    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, channels = 3, dim_head = 64, l_max=196,filter_order=64,dropout=0.1,filter_dropout=0.1):
         super().__init__()
         image_height, image_width = pair(image_size)
         patch_height, patch_width = pair(patch_size)
@@ -76,13 +78,9 @@ class SimpleHyenaViT(nn.Module):
             nn.LayerNorm(dim),
         )
 
-        self.pos_embedding = posemb_sincos_2d(
-            h = image_height // patch_height,
-            w = image_width // patch_width,
-            dim = dim,
-        ) 
+        
 
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
+        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim,l_max,filter_order,dropout,filter_dropout)
 
         self.pool = "mean"
         self.to_latent = nn.Identity()
@@ -93,10 +91,11 @@ class SimpleHyenaViT(nn.Module):
         device = img.device
 
         x = self.to_patch_embedding(img)
-        x += self.pos_embedding.to(device, dtype=x.dtype)
+        
+        # Positional embedding addition is skipped
 
         x = self.transformer(x)
-        x = x.mean(dim = 1)
+        x = x.mean(dim=1)
 
         x = self.to_latent(x)
         return self.linear_head(x)
