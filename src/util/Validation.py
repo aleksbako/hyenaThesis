@@ -37,8 +37,6 @@ def validate(model, dataloader, loss):
     accuracy = correct_predictions / total_samples * 100
     precision = precision_score(all_labels, all_predicted, average='weighted', zero_division=0.0) * 100
     
-    #report = classification_report(all_labels, all_predicted)
-   # print(report)
 
     print(f"Validation Loss: {average_loss:.4f}, Accuracy: {accuracy:.2f}%, Precision: {precision:.2f}%")
     return average_loss , accuracy, precision

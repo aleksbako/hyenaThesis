@@ -3,7 +3,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import tqdm
-from Validation import validate
+from .Validation import validate
 
 def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,scheduler, epochs=32, start_epoch=0, epoch_times=[], mean_loss=[], mean_accuracy=[],best_accuracy=0, best_precision=0):
     #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -57,6 +57,7 @@ def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,sc
         if val_accuracy > best_accuracy or val_precision > best_precision:
             best_accuracy = val_accuracy
             best_precision = val_precision
+            
         scheduler.step()
         torch.save({
             'epoch': epoch,

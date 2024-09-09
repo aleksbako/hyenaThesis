@@ -7,7 +7,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader , random_split
 from datetime import  timedelta
 from sklearn.metrics import accuracy_score, precision_score
-from HyenaOperator import HyenaOperator
 from models.hyenaVit import HyenaVit
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,17 +14,24 @@ import torch.nn.init as init
 from models.ModifiedVit import ModifiedVit
 from dataloaders.dataset.caltech256 import Caltech256Dataset
 from dataloaders.dataset.ImageNetValDataset import ImageNetValDataset
-import time
 from models.SimpleViT import SimpleViT
 from models.hyenaVit import HyenaVit
-#from models.SimpleHyenaViT import SimpleHyenaViT
 from models.SimpleHyenaViT import SimpleHyenaViT
 from sklearn.metrics import classification_report
 from util.Lime import calculate_Lime
 from util.Visualization import plot_metrics
 from util.GradCAM import calculate_Grad_CAM
 from util.GradCAMViT import calculate_vit_grad_cam
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from util import validate, train, OUTPUT_DIR, DATA_DIR, DEVICE
+from util import IMAGE_SIZE, BATCH_SIZE, LOSS, EPOCH, MEAN, STD
+from util import LEARNING_RATE, WEIGHT_DECAY
+from util import HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, HYENA_LOSS
+
+
+import os
+
+from sklearn.model_selection import ParameterGrid
 
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
@@ -41,84 +47,7 @@ def init_weights(module):
     elif isinstance(module, nn.Embedding):
         init.normal_(module.weight, mean=0, std=0.02)
 
-def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,scheduler, warmup_epochs=5, checkpoint_interval=1, epochs=32, start_epoch=0, epoch_times=[], mean_loss=[], mean_accuracy=[],best_accuracy=0, best_precision=0):
-    #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    train_losses = []
-    val_losses = []
-    
-    for epoch in range(start_epoch, epochs):
-        current_losses = []
-        correct_predictions = 0
-        total_samples = 0
-        start_time = time.time()
-        model.train()
 
-        for batch_idx, data in enumerate(tqdm.tqdm(train_dataloader)):
-            optimizer.zero_grad()
-            
-            image = data[0].to("cuda")
-            
-            label = data[1].to("cuda")
-            
-    
-            pred_label = model(image)
-
-            current_loss = loss(pred_label, label)
-            current_loss.backward()
-            optimizer.step()
-
-            _, predicted = torch.max(pred_label, 1)
-            correct_predictions += (predicted == label).sum().item()
-            total_samples += label.size(0)
-
-            if batch_idx % 100 == 99:  # Print every 100 batches
-                print(f'Epoch [{epoch + 1}/{epochs}], Step [{batch_idx + 1}/{len(train_dataloader)}], '
-      f'Loss: {current_loss.item():.4f}, Accuracy: {correct_predictions / total_samples:.4f}')
-                
-
-            current_losses.append(np.mean(current_loss.item()))
-
-        end_time = time.time()
-        epoch_training_time = end_time - start_time
-        epoch_times.append(epoch_training_time)
-        current_accuracy = correct_predictions / total_samples * 100
-        mean_accuracy.append(current_accuracy)
-        mean_loss.append(np.mean(current_losses))
-        train_losses.append(np.mean(current_losses))
-        print(f"{epoch}. epoch completed during training process with current epoch loss : {np.mean(current_losses)}, accuracies: {current_accuracy} Total Training Time: {str(timedelta(seconds=np.sum(epoch_times)))}")
-
-          # Validate the model after each epoch
-        val_loss, val_accuracy, val_precision = validate(model, val_dataloader, loss)
-        val_losses.append(val_loss)
-        # Update the best model based on validation accuracy and precision
-        if val_accuracy > best_accuracy or val_precision > best_precision:
-            best_accuracy = val_accuracy
-            best_precision = val_precision
-        scheduler.step()
-        torch.save({
-            'epoch': epoch,
-            'model': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'epoch_times': epoch_times,
-            'mean_accuracy': mean_accuracy,
-            'mean_loss': mean_loss,
-            'best_accuracy': best_accuracy,
-            'best_precision': best_precision,
-            }, f"../output/{model_type}_checkpoint.pt")
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(start_epoch, epoch+1), train_losses, label='Training Loss')
-        plt.plot(range(start_epoch, epoch+1), val_losses, label='Validation Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title(f'{model_type} Training and Validation Loss')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(f"../output/{model_type}_loss_curve.png")
-      
-            
-      
-
-    return model
         
 def get_model(baseline_model, model_type, train_dataloader,val_dataloader, loss, lr, weight_decay, epochs):
     best_accuracy = best_precision = 0
@@ -165,7 +94,6 @@ def get_model(baseline_model, model_type, train_dataloader,val_dataloader, loss,
 
 
 def GetMedianTime(output_dir="../output/"):
-    
     try:
 
         model1_checkpoint = torch.load(f"../output/model_checkpoint.pt")
@@ -183,53 +111,6 @@ def GetMedianTime(output_dir="../output/"):
     except:
         print("error when fetching  epoch time data")
     
-
-
-def validate(model, dataloader, loss):
-    model.eval()
-    total_samples = 0
-    total_loss = 0
-    correct_predictions = 0
-    all_predicted = []  # Accumulate predictions for the entire epoch
-    all_labels = []     # Accumulate ground truth labels for the entire epoch
-
-    with torch.no_grad():
-        for data in tqdm.tqdm(dataloader):
-            image, labels = data
-            
-            image = image.to("cuda")
-            
-            if isinstance(labels,torch.Tensor) == False:
-                labels = torch.tensor(list(labels), dtype=torch.long)
-           
-            labels = labels.to("cuda")
-
-            pred_label = model(image)
-            current_loss = loss(pred_label, labels)
-            total_loss += current_loss.item()
-          
-            _, predicted = torch.max(pred_label, 1)
-            correct_predictions += (predicted == labels).sum().item()
-
-            total_samples += labels.size(0)
-            all_predicted.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
- 
-        
-    average_loss = total_loss / len(dataloader)
-    accuracy = correct_predictions / total_samples * 100
-    precision = precision_score(all_labels, all_predicted, average='weighted', zero_division=0.0) * 100
-    
-    #report = classification_report(all_labels, all_predicted)
-   # print(report)
-
-    print(f"Validation Loss: {average_loss:.4f}, Accuracy: {accuracy:.2f}%, Precision: {precision:.2f}%")
-    return average_loss , accuracy, precision
-
-
-import os
-
-from sklearn.model_selection import ParameterGrid
 
 def cross_validate(train_dataset, val_dataset, param_grid, loss_function, epochs, batch_size=64):
     best_model = None
@@ -335,21 +216,15 @@ def cross_validate(train_dataset, val_dataset, param_grid, loss_function, epochs
 
 if __name__ == "__main__":
 
-    root_dir = "../data/256_ObjectCategories/"
-    epochs = 50
-    lr = 2e-4
-    loss = nn.CrossEntropyLoss()
+    root_dir = DATA_DIR + "256_ObjectCategories/"
 
-    batch_size = 100
-    
-    
     train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+    transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.8, 1.0)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
     transforms.ColorJitter(0.2,0.2,0.2,0.2),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]),
+    transforms.Normalize(mean=MEAN, std=STD),
    # transforms.RandomErasing(p=0.5),
    # transforms.GaussianBlur(kernel_size=5)
     ]
@@ -357,82 +232,40 @@ if __name__ == "__main__":
 
     val_transform = transforms.Compose([
     transforms.Resize(256),  # Resize the image to 256x256
-    transforms.CenterCrop(224),  # Crop the center of the image to 224x224                # Resize to the same size as training set
+    transforms.CenterCrop(IMAGE_SIZE),  # Crop the center of the image to 224x224                # Resize to the same size as training set
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])                     # Convert images to tensor
-         # Normalize with the same mean and std
+    transforms.Normalize(mean=MEAN, std=STD)                   
+
 ])
 
-    #cal_dataset = Caltech256Dataset("../data/256_ObjectCategories/",transform=train_transform)
-    #cifar_dataset = torchvision.datasets.CIFAR100("../data/",train=True, transform=None)
+    cal_dataset = Caltech256Dataset("../data/256_ObjectCategories/",transform=train_transform)
 
-    #train_size = int(0.8 * len(cal_dataset))
-  #  val_size = len(cal_dataset) - train_size
-    ##train_size = int(0.6 * len(cifar_dataset))
-    #val_size = len(cifar_dataset) - train_size
+    train_size = int(0.8 * len(cal_dataset))
+    val_size = len(cal_dataset) - train_size
 
-  #  train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(42))
-   # train_dataloader = DataLoader(train_dataset,batch_size=batch_size,shuffle=True)
-   # val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-
-
-    import scipy.io
-
-    # Load the .mat file
-    mat_data = scipy.io.loadmat('../data/meta.mat')
-
-    # Extract the synsets array
-    synsets = mat_data['synsets']
-
-    import json
-
-    # Prepare mappings
-    id_to_wnid = {}
-    wnid_to_id = {}
-
-    # Extract data
-    for synset in synsets:
-        ilsvrc_id = int(synset['ILSVRC2012_ID'][0][0])
-        wnid = synset['WNID'][0][0]
-        id_to_wnid[ilsvrc_id] = wnid
-        wnid_to_id[wnid] = ilsvrc_id
-
-    # Save to JSON for easy access in Python
-    with open('synset_mapping.json', 'w') as f:
-        json.dump(id_to_wnid, f, indent=4)
-
-    with open('synset_mapping.json') as f:
-        id_to_wnid = json.load(f)
-
-
-   # Load the datasets
-    train_dataset = datasets.ImageFolder(root='../data/train', transform=train_transform)
-    val_dataset = ImageNetValDataset('../data/val', "../data/ILSVRC2012_validation_ground_truth.txt",id_to_wnid, transform=val_transform)
+    train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(42))
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
     # Apply the respective transformations
-    #train_dataset.dataset.transform = train_transform
-   # val_dataset.dataset.transform = val_transform
-    model_type = "model"
-    weight_decay =1e-2
-   # ViT = torchvision.models.vit_b_16(pretrained=True)
-    
-    ViT = SimpleViT(image_size = 224,
-    patch_size = 16,
-    num_classes = 1001,
-     dim = 512,
-    depth = 8,
-    heads =12,
-    mlp_dim = 2048,
-    dropout=0.1,
-    emb_dropout=0.1).to('cuda')
-    ViT.apply(init_weights)
-    
-   #validate(ViT, val_loader, loss)
-    model = get_model(ViT, model_type, train_loader, val_loader, loss, lr, weight_decay, epochs)
+    train_dataset.dataset.transform = train_transform
+    val_dataset.dataset.transform = val_transform
+
+   # ViT = SimpleViT(image_size = 224,
+   # patch_size = 16,
+  #  num_classes = 1001,
+   #  dim = 512,
+    #depth = 8,
+   # heads =12,
+   # mlp_dim = 2048,
+   # dropout=0.1,
+   # emb_dropout=0.1).to('cuda')
+   # ViT.apply(init_weights)
+
+    ViT = torchvision.models.vit_b_16(pretrained=True)
+    model = get_model(ViT, "ViT", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
   
     #hyena_ViT =  SimpleHyenaViT(image_size = 224,
     #patch_size = 16,
@@ -444,17 +277,11 @@ if __name__ == "__main__":
    # patch_size = 16,
     #num_classes = 257,
    # dim = 512,
-    
-  #epth = 6,
+  # depth = 6,
    # heads = 1,
   # mlp_dim = 512).to('cuda')
 
    # hyena_ViT.apply(init_weights)
-    hyenaLoss = nn.CrossEntropyLoss()
-    hyenaLr=4e-6
-    heyena_weight_decay = 1e-2
-    
-    model_type = "hyena"
     
     """   # Define parameter grid for cross-validation
     param_grid = {
@@ -474,44 +301,26 @@ if __name__ == "__main__":
     }
     """
     # Run cross-validation to find the best model and parameters
-   # best_model, best_params, results = cross_validate(train_dataset, val_dataset, param_grid, hyenaLoss, 15, batch_size)
+    #best_model, best_params, results = cross_validate(train_dataset, val_dataset, param_grid, hyenaLoss, 15, batch_size)
     
-   # hyena_ViT = HyenaVit().to('cuda')
-    #model_hyena = get_model(hyena_ViT, model_type, train_dataloader,val_dataloader, hyenaLoss, hyenaLr, heyena_weight_decay, epochs)
+    hyena_ViT = HyenaVit().to('cuda')
+    model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
 
-
-    #validate(model_hyena, val_dataloader, hyenaLoss)
+    validate(model, val_loader, LOSS)
+    validate(model_hyena, val_loader, HYENA_LOSS)
  #   
     
-   # plot_metrics( output_dir="../output/")
-  #  GetMedianTime()
+    plot_metrics( output_dir=OUTPUT_DIR)
+    GetMedianTime()
     
-
-    #for batch in val_dataloader:
-    #    images, labels = batch
-    #    break  # Stop after the first batch
-
-    
-    #image = images.to("cuda")
-   # model.eval()
   
     img_path = 'D:/projects/thesis/hyenaThesis/data/256_ObjectCategories/001.ak47/001_0002.jpg'  
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    #Hyena calculation
-   # calculate_Lime(model_hyena, img_path, device)
-   # target_layer = model.transformer.layers[-1][0] 
-    #calculate_Grad_CAM(model,target_layer, img_path, device)
+    target_layer = [ViT.encoder.layers[-1].self_attention]
 
-   # transformer_layers = model_hyena.ViT.encoder.layers
-    #target_layer = [model_hyena.blocks[-1].attn]
-   # target_layer = [model_hyena.get_final_attention_layer()]
-   
-   # print(f"Requires grad: {[param.requires_grad for param in target_layer[0].parameters()]}")
-    
+    calculate_vit_grad_cam(ViT, target_layer, img_path, "ViT" ,"final_attention_layer")
 
-  #  calculate_vit_grad_cam(model_hyena, target_layer, img_path)
-    #calculate_Lime(model, img_path, device)
+    calculate_Lime(ViT, img_path, DEVICE)
     
    
 

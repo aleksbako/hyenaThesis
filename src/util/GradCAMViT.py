@@ -53,8 +53,10 @@ def get_args():
     return args
 
 def reshape_transform(tensor, height=14, width=14):
-    print(f"Original tensor shape: {tensor.shape}")
-    result = tensor.reshape(tensor.size(0),
+    #print(f"Original tensor shape: {tensor.shape}")
+    if isinstance(tensor, tuple):
+        tensor = tensor[0]
+    result = tensor[:, 1:, :].reshape(tensor.size(0),
                                       height, width, tensor.size(2))
 
     # Bring the channels to the first dimension,
@@ -63,17 +65,13 @@ def reshape_transform(tensor, height=14, width=14):
     return result
 
 
-def calculate_vit_grad_cam(model,target_layers, img_path):
+def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name):
     """ python vit_gradcam.py --image-path <path_to_image>
     Example usage of using cam-methods on a VIT network.
 
     """
-    #model = timm.create_model('swin_base_patch4_window7_224', pretrained=True)
 
     model.eval()
-    #target_layers = [model.layers[-1].blocks[-1].norm2]
-
-   # img_path = 'D:/projects/thesis/hyenaThesis/data/256_ObjectCategories/009.bear/009_0004.jpg' 
 
     cam = GradCAM(model=model,
                                    target_layers=target_layers,
@@ -109,4 +107,4 @@ def calculate_vit_grad_cam(model,target_layers, img_path):
     grayscale_cam = grayscale_cam[0, :]
 
     cam_image = show_cam_on_image(rgb_img, grayscale_cam)
-    cv2.imwrite(f'test_cam.jpg', cam_image)
+    cv2.imwrite(f'{model_type}_cam_{layer_name}.jpg', cam_image)
