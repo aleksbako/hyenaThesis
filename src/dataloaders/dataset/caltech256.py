@@ -11,6 +11,7 @@ class Caltech256Dataset(Dataset):
         self.transform = transform
         self.classes = sorted(os.listdir(root_dir))
         self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
+        self.idx_to_class = {idx: cls for cls, idx in self.class_to_idx.items()}
         self.images, self.labels = self._load_data()
 
     def _load_data(self):
@@ -34,3 +35,6 @@ class Caltech256Dataset(Dataset):
         if self.transform:
             image = self.transform(image)
         return image, label
+
+    def get_class_name(self, idx):
+        return self.idx_to_class[idx]

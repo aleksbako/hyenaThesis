@@ -12,6 +12,7 @@ class HyenaOperator(nn.Module):
             filter_order=64,
             dropout=0.0,  
             filter_dropout=0.0, 
+            isVit=False,
             **filter_args,
         ):
         r"""
@@ -32,7 +33,7 @@ class HyenaOperator(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.in_proj = nn.Linear(d_model, inner_width)
         self.out_proj = nn.Linear(d_model, d_model)
-        
+        self.isVit = isVit
         self.short_filter = nn.Conv1d(
             inner_width, 
             inner_width, 
@@ -69,6 +70,8 @@ class HyenaOperator(nn.Module):
         y = rearrange(v * x[0], 'b d l -> b l d')
 
         y = self.out_proj(y)
+        if self.isVit:
+            return y, k
         return y
 
     

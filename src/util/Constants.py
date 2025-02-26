@@ -1,21 +1,53 @@
 import torch
+import torchvision.transforms as transforms
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#LEARNING_RATE=1e-3
+#LEARNING_RATE=1e-4 #SE
+LEARNING_RATE=1e-3 #VIT
+WEIGHT_DECAY=1e-4
+LOSS=torch.nn.CrossEntropyLoss(label_smoothing=0.1)
 
-LEARNING_RATE=2e-4
-WEIGHT_DECAY=5e-2
-LOSS=torch.nn.CrossEntropyLoss()
-
-HYENA_LEARNING_RATE=1e-5
-HYENA_WEIGHT_DECAY=5e-2
-HYENA_LOSS=torch.nn.CrossEntropyLoss()
+#HYENA_LEARNING_RATE=3e-4 #SE
+HYENA_LEARNING_RATE=1e-3 #VIT
+#HYENA_WEIGHT_DECAY=2e-5 #VIT
+HYENA_WEIGHT_DECAY=1e-4 #SE
+HYENA_LOSS=torch.nn.CrossEntropyLoss(label_smoothing=0.1)
 
 DATA_DIR = '../data/'
 OUTPUT_DIR = '../output/'
 
 NUM_CLASSES = 257
-IMAGE_SIZE = 224
-BATCH_SIZE=100
-EPOCH=50
-MEAN=[0.4914, 0.4822, 0.4465]
-STD=[0.2023, 0.1994, 0.2010]
+IMAGE_SIZE = 224 #64 #224
+BATCH_SIZE=32#16
+#EPOCH=30
+EPOCH=80 #60 SE
+MEAN=[0.485, 0.456, 0.406]
+STD=[0.229, 0.224, 0.225]
+VARMUP_EPOCH=15
+#VARMUP_EPOCH=15 #SE
+VAL_TRANSFORMATION = transforms.Compose([
+    transforms.Resize((IMAGE_SIZE,IMAGE_SIZE)),
+    #transforms.Grayscale(num_output_channels=1),  # Keep grayscale but single channel
+    transforms.Lambda(lambda x: x.convert("RGB")),
+    #transforms.Grayscale(num_output_channels=3),  # Resize the image to 256x256
+    #transforms.CenterCrop((IMAGE_SIZE,IMAGE_SIZE)),  # Crop the center of the image to 224x224                # Resize to the same size as training set
+    transforms.ToTensor(),
+    transforms.Normalize(mean=MEAN, std=STD)                   
+])
+TRAIN_TRANSFORMATION = transforms.Compose([
+    transforms.Resize(250),
+    transforms.RandomCrop((IMAGE_SIZE,IMAGE_SIZE)),
+    transforms.Lambda(lambda x: x.convert("RGB")),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    #transforms.Grayscale(num_output_channels=3),
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(0.1,0.1,0.1,0.0),
+    #transforms.GaussianBlur(kernel_size=5),
+    transforms.RandomErasing(p=0.2), #SE 0.5
+    transforms.ToTensor(),
+    transforms.Normalize(mean=MEAN, std=STD)
+    ]
+    )
+

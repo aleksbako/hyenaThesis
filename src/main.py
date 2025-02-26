@@ -1,38 +1,30 @@
 import torch
-import torchvision
 import torch.nn as nn
-import tqdm
-from torchvision import datasets
+import torch.nn.init as init
+import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader , random_split
-from datetime import  timedelta
-from sklearn.metrics import accuracy_score, precision_score
-from models.hyenaVit import HyenaVit
 import numpy as np
-import matplotlib.pyplot as plt
-import torch.nn.init as init
-from models.ModifiedVit import ModifiedVit
+import os
+from sklearn.model_selection import ParameterGrid
+
 from dataloaders.dataset.caltech256 import Caltech256Dataset
 from dataloaders.dataset.ImageNetValDataset import ImageNetValDataset
-from models.SimpleViT import SimpleViT
 from models.hyenaVit import HyenaVit
+from models.Vit import Vit
 from models.SimpleHyenaViT import SimpleHyenaViT
-from sklearn.metrics import classification_report
+
 from util.Lime import calculate_Lime
 from util.Visualization import plot_metrics
 from util.GradCAM import calculate_Grad_CAM
 from util.GradCAMViT import calculate_vit_grad_cam
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from util import validate, train, OUTPUT_DIR, DATA_DIR, DEVICE
-from util import IMAGE_SIZE, BATCH_SIZE, LOSS, EPOCH, MEAN, STD
+from dataloaders.ImageNetLoader import getImageNetDataLoaders
+from dataloaders.Caltech256Loader import getCaltechDataLoaders
+from util import validate, train, get_model, get_median_time, OUTPUT_DIR, DATA_DIR, DEVICE
+from util import IMAGE_SIZE, BATCH_SIZE, LOSS, EPOCH, MEAN, STD, NUM_CLASSES, VAL_TRANSFORMATION
 from util import LEARNING_RATE, WEIGHT_DECAY
 from util import HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, HYENA_LOSS
-
-
-import os
-
-from sklearn.model_selection import ParameterGrid
-
+from experiments.layer_change import ViT_experiments, SE_experiments, test_SE, AA_experiments
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
         init.kaiming_uniform_(module.weight, a=0, mode='fan_in', nonlinearity='relu')
@@ -47,71 +39,6 @@ def init_weights(module):
     elif isinstance(module, nn.Embedding):
         init.normal_(module.weight, mean=0, std=0.02)
 
-
-        
-def get_model(baseline_model, model_type, train_dataloader,val_dataloader, loss, lr, weight_decay, epochs):
-    best_accuracy = best_precision = 0
-    try:
-        print(f"{model_type}_checkpoint.pt")
-        checkpoint = torch.load(f"../output/{model_type}_checkpoint.pt")
-        
-          # Load the state dictionary into the baseline_model
-        baseline_model.load_state_dict(checkpoint['model'])
-    
-        
-        # Now model refers to the baseline_model with loaded weights
-        model = baseline_model
-    
-        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-        
-        optim.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        start_epoch = checkpoint['epoch'] + 1
-        epoch_times = checkpoint['epoch_times']
-        mean_accuracy = checkpoint['mean_accuracy']
-        mean_loss = checkpoint['mean_loss']
-        best_accuracy = checkpoint['best_accuracy']
-        best_precision = checkpoint['best_precision']
-        
-
-    except Exception as e:
-        print(e)
-        start_epoch = 0
-        model = baseline_model
-        optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,betas=[0.9,0.999])
-        epoch_times = []
-        mean_accuracy = []
-        mean_loss = []
-    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=32)
-    scheduler = CosineAnnealingLR(optim, T_max=10)
-    print(start_epoch)
-    if start_epoch < epochs:
-        
-        model = train(model,train_dataloader,val_dataloader,loss,optim,model_type, scheduler,epochs=epochs, start_epoch=start_epoch , epoch_times=epoch_times, mean_loss=mean_loss, mean_accuracy=mean_accuracy , best_accuracy=best_accuracy, best_precision=best_precision)
-    
-    return model
-
-
-
-def GetMedianTime(output_dir="../output/"):
-    try:
-
-        model1_checkpoint = torch.load(f"../output/model_checkpoint.pt")
-        
-        model2_checkpoint = torch.load(f"../output/hyena_checkpoint.pt")
-
-        print(f"Min time spent for ViT model : {np.min(model1_checkpoint['epoch_times'])}")
-        print(f"Min time spent for Hyena ViT model : {np.min(model2_checkpoint['epoch_times'])}")
-        # Adjust epoch times to be cumulative
-        print(f"Median time spent for ViT model : {np.median(model1_checkpoint['epoch_times'])}")
-        print(f"Median time spent for Hyena ViT model : {np.median(model2_checkpoint['epoch_times'])}")
-      #  model2_epoch_times_cumulative = [sum(model2_checkpoint['epoch_times'][:i+1]) for i in range(len(model2_checkpoint['epoch_times']))]
-        print(f"Max time spent for ViT model : {np.max(model1_checkpoint['epoch_times'])}")
-        print(f"Max time spent for Hyena ViT model : {np.max(model2_checkpoint['epoch_times'])}")
-    except:
-        print("error when fetching  epoch time data")
-    
-
 def cross_validate(train_dataset, val_dataset, param_grid, loss_function, epochs, batch_size=64):
     best_model = None
     best_score = 0
@@ -121,8 +48,8 @@ def cross_validate(train_dataset, val_dataset, param_grid, loss_function, epochs
     os.makedirs(output_dir, exist_ok=True)
     log_file_path = os.path.join(output_dir, "cross_validation_results.txt")
     # Create DataLoaders
-    mean=[0.485, 0.456, 0.406]
-    std=[0.229, 0.224, 0.225]
+    mean=MEAN
+    std=STD
  
  # Open the log file for writing
     with open(log_file_path, "a") as log_file:
@@ -215,74 +142,80 @@ def cross_validate(train_dataset, val_dataset, param_grid, loss_function, epochs
     return best_model, best_params, results
 
 if __name__ == "__main__":
-
-    root_dir = DATA_DIR + "256_ObjectCategories/"
+    #1, 25, 90
+    torch.manual_seed(42)
+    np.random.seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    img_paths = [ (DATA_DIR+'256_ObjectCategories/145.motorbikes-101/145_0430.jpg',144),  
+                 (DATA_DIR+'256_ObjectCategories/015.bonsai-101/015_0015.jpg',14),
+                # (DATA_DIR+'256_ObjectCategories/230.trilobite-101/230_0074.jpg',229), 
+                 (DATA_DIR+'256_ObjectCategories/252.car-side-101/252_0034.jpg',251)]
 
     train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.8, 1.0)),
+    transforms.Resize(128),
+    transforms.RandomCrop((IMAGE_SIZE,IMAGE_SIZE)),
+    transforms.Lambda(lambda x: x.convert("RGB")),
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
-    transforms.ColorJitter(0.2,0.2,0.2,0.2),
+    #transforms.Grayscale(num_output_channels=3),
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(0.1,0.1,0.1,0.0),
+    #transforms.GaussianBlur(kernel_size=5),
+    transforms.RandomErasing(p=0.1), #SE 0.5
     transforms.ToTensor(),
-    transforms.Normalize(mean=MEAN, std=STD),
-   # transforms.RandomErasing(p=0.5),
-   # transforms.GaussianBlur(kernel_size=5)
+    transforms.Normalize(mean=MEAN, std=STD)
     ]
     )
 
-    val_transform = transforms.Compose([
-    transforms.Resize(256),  # Resize the image to 256x256
-    transforms.CenterCrop(IMAGE_SIZE),  # Crop the center of the image to 224x224                # Resize to the same size as training set
-    transforms.ToTensor(),
-    transforms.Normalize(mean=MEAN, std=STD)                   
 
-])
 
-    cal_dataset = Caltech256Dataset("../data/256_ObjectCategories/",transform=train_transform)
+    #cal_dataset = Caltech256Dataset(DATA_DIR + "256_ObjectCategories/",transform=train_transform)
+    #cal_dataset = torchvision.datasets.Caltech256(root="../data/",download=False)
+        # Calculate the sizes for the splits
+    #train_size = int(0.85 * len(cal_dataset))
+    #val_size = int(0.1 * len(cal_dataset))
+   # test_size = len(cal_dataset) - train_size - val_size  # Remaining data for testing
 
-    train_size = int(0.8 * len(cal_dataset))
-    val_size = len(cal_dataset) - train_size
-
-    train_dataset, val_dataset = random_split(cal_dataset, [train_size, val_size], torch.Generator().manual_seed(42))
+    #train_dataset, val_dataset, test_dataset = random_split(cal_dataset, [train_size, val_size,test_size], torch.Generator().manual_seed(11))
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    #train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+   # val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    #test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
     # Apply the respective transformations
-    train_dataset.dataset.transform = train_transform
-    val_dataset.dataset.transform = val_transform
+   # train_dataset.dataset.transform = train_transform
+    #val_dataset.dataset.transform = val_transform
+    #train_loader, val_loader, dataset  = getImageNetDataLoaders(train_transform, VAL_TRANSFORMATION)
+    train_loader, val_loader, dataset = getCaltechDataLoaders(train_transform, VAL_TRANSFORMATION)
 
-   # ViT = SimpleViT(image_size = 224,
-   # patch_size = 16,
-  #  num_classes = 1001,
-   #  dim = 512,
-    #depth = 8,
-   # heads =12,
-   # mlp_dim = 2048,
-   # dropout=0.1,
-   # emb_dropout=0.1).to('cuda')
-   # ViT.apply(init_weights)
-
-    ViT = torchvision.models.vit_b_16(pretrained=True)
-    model = get_model(ViT, "ViT", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
-  
-    #hyena_ViT =  SimpleHyenaViT(image_size = 224,
-    #patch_size = 16,
-    #num_classes = 257,
-   # d_model = 512,
-    #depth = 2,
-  #  dropout = 0.3).to('cuda')   
-    #hyena_ViT =  SimpleHyenaViT(image_size = 224,
-   # patch_size = 16,
-    #num_classes = 257,
-   # dim = 512,
-  # depth = 6,
-   # heads = 1,
-  # mlp_dim = 512).to('cuda')
-
-   # hyena_ViT.apply(init_weights)
+    ViT_experiments(dataset,train_loader, val_loader,img_paths)
+    #SE_experiments(dataset,train_loader, val_loader,img_paths)
+    #AA_experiments(dataset,train_loader, val_loader,img_paths)
+    #test_SE(cal_dataset,train_loader, val_loader)
+    #ViT = Vit(preTrained=True).to(DEVICE)
+   # model = get_model(ViT, "ViT", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
+   #
     
+    #target_layer = [model.ViT.encoder.layers[-1].ln_1]
+   # calculate_vit_grad_cam(model, target_layer, img_path, "ViT" ,"final_attention_layer")
+   # calculate_Lime(model, img_path, DEVICE, cal_dataset, "ViT")
+
+    #hyena_ViT = HyenaVit(preTrained=False).to(DEVICE)
+    #model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
+
+    #validate(model, val_loader, LOSS)
+    #validate(model_hyena, val_loader, HYENA_LOSS)
+    
+    #plot_metrics("ViT", "ViT_with_Hyena",output_dir=OUTPUT_DIR)
+   # get_median_time("ViT", "ViT_with_Hyena")
+  
+    #hyena_target_layer = [model_hyena.ViT.encoder.layers[-1].ln_1]
+    #calculate_vit_grad_cam(model_hyena, hyena_target_layer, img_path, "ViT_with_hyena" ,"final_attention_layer")
+    #calculate_Lime(model_hyena, img_path, DEVICE, cal_dataset, "ViT_with_Hyena")
+
+
     """   # Define parameter grid for cross-validation
     param_grid = {
         'image_size': [128,224],  # You can add other sizes if needed
@@ -303,25 +236,7 @@ if __name__ == "__main__":
     # Run cross-validation to find the best model and parameters
     #best_model, best_params, results = cross_validate(train_dataset, val_dataset, param_grid, hyenaLoss, 15, batch_size)
     
-    hyena_ViT = HyenaVit().to('cuda')
-    model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
 
-    validate(model, val_loader, LOSS)
-    validate(model_hyena, val_loader, HYENA_LOSS)
- #   
-    
-    plot_metrics( output_dir=OUTPUT_DIR)
-    GetMedianTime()
-    
-  
-    img_path = 'D:/projects/thesis/hyenaThesis/data/256_ObjectCategories/001.ak47/001_0002.jpg'  
-
-    target_layer = [ViT.encoder.layers[-1].self_attention]
-
-    calculate_vit_grad_cam(ViT, target_layer, img_path, "ViT" ,"final_attention_layer")
-
-    calculate_Lime(ViT, img_path, DEVICE)
-    
    
 
 

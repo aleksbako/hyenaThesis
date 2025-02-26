@@ -6,15 +6,18 @@ from PIL import Image
 from lime import lime_image
 from skimage.segmentation import mark_boundaries
 from .Visualization import preprocess_image
+from util import IMAGE_SIZE, MEAN, STD
+from dataloaders.dataset.caltech256 import Caltech256Dataset
 
 
-
-def calculate_Lime(model, image_path, device):
+def calculate_Lime(model, image_path, device, dataset, model_type):
 
     def predict(images):
+        normalize = transforms.Normalize(mean=MEAN, std=STD)
+
         model.eval()
-        images = torch.stack([transforms.ToTensor()(img) for img in images]).to(device)
-        images = torch.nn.functional.interpolate(images, size=(224, 224))
+        images = torch.stack([normalize(transforms.ToTensor()(img)) for img in images]).to(device)
+        images = torch.nn.functional.interpolate(images, size=(IMAGE_SIZE, IMAGE_SIZE))
         output = model(images)
         probabilities = torch.nn.functional.softmax(output, dim=1).detach().cpu().numpy()
         return probabilities
@@ -24,14 +27,17 @@ def calculate_Lime(model, image_path, device):
 
      # Forward pass to get the predicted class
     output = model(input_tensor)
-    target_class = output.argmax().item()
 
+    _, target_class = torch.max(output, 1)
+    target_class = target_class.item()
+    print(target_class)
     # Load the image for visualization
     img = Image.open(image_path)
-    img = np.array(img.resize((224, 224)))
-
+    img = np.array(img.resize((IMAGE_SIZE, IMAGE_SIZE)))
+    
     # Initialize LIME
     explainer = lime_image.LimeImageExplainer()
+    
 
     # Explain the prediction using LIME
     explanation = explainer.explain_instance(
@@ -41,7 +47,8 @@ def calculate_Lime(model, image_path, device):
         hide_color=0, 
         num_samples=1000
     )
-
+    print(f"Available labels in explanation: {explanation.top_labels}")
+    #print(target_class)
     # Get the image and mask for the top class
     temp, mask = explanation.get_image_and_mask(
         target_class, 
@@ -53,7 +60,7 @@ def calculate_Lime(model, image_path, device):
     # Show the result
     plt.imshow(mark_boundaries(temp, mask,mode='inner'))
     plt.axis('off')
-    plt.show()
+    plt.savefig(f"./{model_type}_lime.png", bbox_inches='tight', pad_inches=0)
     
     
 

@@ -80,8 +80,8 @@ def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name
     rgb_img = cv2.imread(img_path, 1)[:, :, ::-1]
     rgb_img = cv2.resize(rgb_img, (224, 224))
     rgb_img = np.float32(rgb_img) / 255
-    input_tensor = preprocess_image(rgb_img, mean=[0.5, 0.5, 0.5],
-                                    std=[0.5, 0.5, 0.5])
+    input_tensor = preprocess_image(rgb_img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    input_tensor.requires_grad = True  # Ensure gradients are enabled
     
 
         # Forward pass through the model to get the prediction
@@ -89,22 +89,32 @@ def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name
 
     # Get the predicted label
     _, predicted_label = torch.max(output, 1)
-
+    cam_batch_size = 32
+    
     print(f"Predicted label: {predicted_label.item()}")
+    output[:, predicted_label].backward(retain_graph=True)
 
     # If None, returns the map for the highest scoring category.
     # Otherwise, targets the requested category.
-    targets = None
-  
-    # AblationCAM and ScoreCAM have batched implementations.
-    # You can override the internal batch size for faster computation.
-    cam.batch_size = 32
+    for idx, target_layer in enumerate(target_layers):
+        print(f"Processing layer: {target_layer}")
 
-    grayscale_cam = cam(input_tensor=input_tensor,
-                        targets=targets)
+        # Initialize Grad-CAM with the current target layer
+        cam = GradCAM(model=model, target_layers=[target_layer], reshape_transform=reshape_transform)
+        cam.batch_size = cam_batch_size
 
-    # Here grayscale_cam has only one image in the batch
-    grayscale_cam = grayscale_cam[0, :]
+        # Generate the CAM heatmap for the input image
+        grayscale_cam = cam(input_tensor=input_tensor)
 
-    cam_image = show_cam_on_image(rgb_img, grayscale_cam)
-    cv2.imwrite(f'{model_type}_cam_{layer_name}.jpg', cam_image)
+        # Extract the CAM for the current image (since we have a single image in the batch)
+        grayscale_cam = grayscale_cam[0, :]
+
+        # Overlay the heatmap on the original image
+        cam_image = show_cam_on_image(rgb_img, grayscale_cam)
+
+        # Save the CAM image with a filename based on the layer index and model type
+        layer_name = str(target_layer).replace('/', '_')  # Handle layer name formatting
+        output_filename = f'{model_type}_cam_layer_{idx}_{layer_name}_{img_path}.jpg'
+        cv2.imwrite(output_filename, cam_image)
+
+        print(f"Saved CAM image for layer {layer_name} as {output_filename}")
