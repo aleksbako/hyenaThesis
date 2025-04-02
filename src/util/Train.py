@@ -7,7 +7,7 @@ from .Validation import validate
 from datetime import  timedelta
 from sklearn.metrics import classification_report
 import re
-import psutil
+
 def pretrain_unfreeze_all(model):
     # Freeze all layers except SE (attention layers)
     for name, param in model.named_parameters():
@@ -389,6 +389,6 @@ def revive_gradients(model, scale=1e-3):
             )
            # print(f"Revived gradients for {name}")
 
-def log_memory():
-    print(f"CPU: {psutil.virtual_memory().percent}% | "
-          f"GPU: {torch.cuda.memory_allocated()/1e9:.1f}GB")
+#def log_memory():
+#    print(f"CPU: {psutil.virtual_memory().percent}% | "
+#          f"GPU: {torch.cuda.memory_allocated()/1e9:.1f}GB")
