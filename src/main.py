@@ -20,11 +20,14 @@ from util.GradCAM import calculate_Grad_CAM
 from util.GradCAMViT import calculate_vit_grad_cam
 from dataloaders.ImageNetLoader import getImageNetDataLoaders
 from dataloaders.Caltech256Loader import getCaltechDataLoaders
+from dataloaders.Cifar100Loader import getCifarDataLoaders
 from util import validate, train, get_model, get_median_time, OUTPUT_DIR, DATA_DIR, DEVICE
-from util import IMAGE_SIZE, BATCH_SIZE, LOSS, EPOCH, MEAN, STD, NUM_CLASSES, VAL_TRANSFORMATION
+from util import IMAGE_SIZE, BATCH_SIZE, LOSS, EPOCH, MEAN, STD, NUM_CLASSES, VAL_TRANSFORMATION,TRAIN_TRANSFORMATION
 from util import LEARNING_RATE, WEIGHT_DECAY
 from util import HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, HYENA_LOSS
-from experiments.layer_change import ViT_experiments, SE_experiments, test_SE, AA_experiments
+from experiments.layer_change import ViT_experiments, SE_experiments, test_SE, AA_experiments, MobileNet_experiments
+
+
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Conv2d)):
         init.kaiming_uniform_(module.weight, a=0, mode='fan_in', nonlinearity='relu')
@@ -147,26 +150,14 @@ if __name__ == "__main__":
     np.random.seed(42)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    img_paths = [ (DATA_DIR+'256_ObjectCategories/145.motorbikes-101/145_0430.jpg',144),  
-                 (DATA_DIR+'256_ObjectCategories/015.bonsai-101/015_0015.jpg',14),
-                # (DATA_DIR+'256_ObjectCategories/230.trilobite-101/230_0074.jpg',229), 
-                 (DATA_DIR+'256_ObjectCategories/252.car-side-101/252_0034.jpg',251)]
 
-    train_transform = transforms.Compose([
-    transforms.Resize(128),
-    transforms.RandomCrop((IMAGE_SIZE,IMAGE_SIZE)),
-    transforms.Lambda(lambda x: x.convert("RGB")),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomVerticalFlip(),
-    #transforms.Grayscale(num_output_channels=3),
-    transforms.RandomRotation(15),
-    transforms.ColorJitter(0.1,0.1,0.1,0.0),
-    #transforms.GaussianBlur(kernel_size=5),
-    transforms.RandomErasing(p=0.1), #SE 0.5
-    transforms.ToTensor(),
-    transforms.Normalize(mean=MEAN, std=STD)
-    ]
-    )
+    img_paths = [ (DATA_DIR+'256_ObjectCategories/164.porcupine/164_0006.jpg',163,[128,151,212]),
+        (DATA_DIR+'256_ObjectCategories/145.motorbikes-101/145_0430.jpg',144,[104,145,250]) ]
+        
+                # (DATA_DIR+'256_ObjectCategories/015.bonsai-101/015_0015.jpg',14),
+                # (DATA_DIR+'256_ObjectCategories/230.trilobite-101/230_0074.jpg',229), 
+               #  (DATA_DIR+'256_ObjectCategories/252.car-side-101/252_0034.jpg',251)]
+
 
 
 
@@ -188,32 +179,16 @@ if __name__ == "__main__":
    # train_dataset.dataset.transform = train_transform
     #val_dataset.dataset.transform = val_transform
     #train_loader, val_loader, dataset  = getImageNetDataLoaders(train_transform, VAL_TRANSFORMATION)
-    train_loader, val_loader, dataset = getCaltechDataLoaders(train_transform, VAL_TRANSFORMATION)
-
-    ViT_experiments(dataset,train_loader, val_loader,img_paths)
+    train_loader, val_loader, dataset = getCaltechDataLoaders(TRAIN_TRANSFORMATION, VAL_TRANSFORMATION)
+    #train_loader, val_loader, dataset = getCifarDataLoaders(TRAIN_TRANSFORMATION, VAL_TRANSFORMATION)
+    #ViT_experiments(dataset,train_loader, val_loader,img_paths)
     #SE_experiments(dataset,train_loader, val_loader,img_paths)
-    #AA_experiments(dataset,train_loader, val_loader,img_paths)
+    #MobileNet_experiments(dataset,train_loader, val_loader,img_paths)
+    AA_experiments(dataset,train_loader, val_loader,img_paths)
     #test_SE(cal_dataset,train_loader, val_loader)
     #ViT = Vit(preTrained=True).to(DEVICE)
    # model = get_model(ViT, "ViT", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
    #
-    
-    #target_layer = [model.ViT.encoder.layers[-1].ln_1]
-   # calculate_vit_grad_cam(model, target_layer, img_path, "ViT" ,"final_attention_layer")
-   # calculate_Lime(model, img_path, DEVICE, cal_dataset, "ViT")
-
-    #hyena_ViT = HyenaVit(preTrained=False).to(DEVICE)
-    #model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
-
-    #validate(model, val_loader, LOSS)
-    #validate(model_hyena, val_loader, HYENA_LOSS)
-    
-    #plot_metrics("ViT", "ViT_with_Hyena",output_dir=OUTPUT_DIR)
-   # get_median_time("ViT", "ViT_with_Hyena")
-  
-    #hyena_target_layer = [model_hyena.ViT.encoder.layers[-1].ln_1]
-    #calculate_vit_grad_cam(model_hyena, hyena_target_layer, img_path, "ViT_with_hyena" ,"final_attention_layer")
-    #calculate_Lime(model_hyena, img_path, DEVICE, cal_dataset, "ViT_with_Hyena")
 
 
     """   # Define parameter grid for cross-validation
