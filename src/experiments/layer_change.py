@@ -1,6 +1,6 @@
 import torch
-from util.GetModel import get_model , init_weights
-from util import DEVICE, OUTPUT_DIR,EPOCH, NUM_CLASSES
+from util.GetModel import get_model
+from util import DEVICE, OUTPUT_DIR,EPOCH, NUM_CLASSES, IMAGE_SIZE
 from util.GradCAMViT import calculate_vit_grad_cam
 from util.GradCAM import calculate_Grad_CAM
 from util.Lime import calculate_Lime
@@ -9,6 +9,8 @@ from util import validate
 from util.Statistics import get_median_time
 from util.Visualization import plot_metrics
 from models.Vit import Vit
+from models.MobileNetWithHyena import MobileNetWithHyena
+from models.MobileNetWithSE import MobileNetWithSE
 from models.hyenaVit import HyenaVit
 from models.SERestNet50 import SEResNet50
 from Hyena.SEBasicHyenaBlock import SEBasicHyenaBlock
@@ -21,12 +23,13 @@ from Hyena.HyenaTransformerBlock import HyenaTransformerBlock
 from Hyena.Hyena_WideBasic import Hyena_WideBasic
 from util.LearningRateFinder import LearningRateFinder
 from util.Shap import caluclateShap
-from util.Counterfactual import counterfactual
+from util.Counterfactual import counterfactual, class_transformation_experiment , plot_frequency_analysis ,compare_feature_importance, decision_boundary_analysis
 import torch.nn as nn
 import torchvision
 import timm
 from modules.WideBasic import WideBasic
 import re
+import torch.nn.init as init
 import os
 
 def pretrain_freeze_SE(SE, type=None):
@@ -97,8 +100,61 @@ def pretrain_freeze_SE(SE, type=None):
         if 'attn' in name or 'head' in name: 
             param.requires_grad = True
 
+def init_hyena_operator_params(module):
+    """Initialize all parameters in the HyenaOperator with Hyena-specific schemes."""
+    # GELU-specific gain factor
+    GELU_GAIN = 1.414  # sqrt(2) approximation that works well with GELU
+    
+    # Initialize linear projections
+    if hasattr(module, 'in_proj'):
+        nn.init.xavier_normal_(module.in_proj.weight, gain=GELU_GAIN)
+        if hasattr(module.in_proj, 'bias') and module.in_proj.bias is not None:
+            nn.init.normal_(module.in_proj.bias, mean=0.0, std=0.01)
 
+    if hasattr(module, 'out_proj'):
+        nn.init.xavier_normal_(module.out_proj.weight, gain=1.0)  # Conservative output
+        if hasattr(module.out_proj, 'bias') and module.out_proj.bias is not None:
+            nn.init.zeros_(module.out_proj.bias)
+    
+    # Initialize short filter convolution
+    if hasattr(module, 'short_filter'):
+        if hasattr(nn.init, 'dirac_'):
+            nn.init.dirac_(module.short_filter.weight)
+        else:
+            # Fallback for older PyTorch versions
+            with torch.no_grad():
+                module.short_filter.weight.fill_(0)
+                for i in range(min(module.short_filter.weight.shape[:2])):
+                    module.short_filter.weight[i,i] = 1.0
+        
+        if hasattr(module.short_filter, 'bias') and module.short_filter.bias is not None:
+            nn.init.constant_(module.short_filter.bias, 0.01)
 
+    # Specialized initialization for HyenaFilter components
+    if hasattr(module, 'filter_fn'):
+        # Initialize positional embeddings
+        if hasattr(module.filter_fn, 'pos_emb') and hasattr(module.filter_fn.pos_emb, 'z'):
+            nn.init.normal_(module.filter_fn.pos_emb.z, std=0.1)
+        
+        # Initialize implicit filter MLP
+        if hasattr(module.filter_fn, 'implicit_filter'):
+            for layer in module.filter_fn.implicit_filter:
+                if isinstance(layer, nn.Linear):
+                    nn.init.xavier_normal_(layer.weight, gain=GELU_GAIN)
+                    if hasattr(layer, 'bias') and layer.bias is not None:
+                        nn.init.normal_(layer.bias, mean=0.1, std=0.01)
+        
+        # Initialize modulation
+        if hasattr(module.filter_fn, 'modulation'):
+            for name, param in module.filter_fn.modulation.named_parameters():
+                if 'weight' in name:
+                    nn.init.xavier_uniform_(param, gain=0.5)
+                elif 'bias' in name:
+                    nn.init.constant_(param, 0.1)
+        
+        # Initialize bias
+        if hasattr(module.filter_fn, 'bias'):
+            nn.init.normal_(module.filter_fn.bias, mean=0.1, std=0.01)
 
 def pretrain_freeze_AA(SE, type=None):
     to_replace = []
@@ -130,7 +186,7 @@ def pretrain_freeze_AA(SE, type=None):
 
         if type=='hyena':
                         # Create a new Hyena block
-            new_block = Hyena_WideBasic(in_channels, out_channels, 0.2,16)
+            new_block = Hyena_WideBasic(in_channels, out_channels, 0.3,16)
         else:
             new_block = WideBasic(in_channels,out_channels,0.4,shape=16).to('cuda')
                         # Replace the attention layer in the model
@@ -176,9 +232,13 @@ def pretrain_freeze_AA(SE, type=None):
 def replace_attention_with_hyena(model, model_type=None):
     to_replace = []
     # Identify all MultiheadAttention layers
+    count = 0
     for name, module in model.named_modules():
-        if isinstance(module, nn.TransformerEncoderLayer):
+        if re.fullmatch(r'.*\.encoder_layer_\d+.self_attention', name):
+            if count > 10:
+                break
             print(f'Found Transformer block: {name}')
+            count += 1
             to_replace.append(name)
 
     for name, param in model.named_parameters():
@@ -186,47 +246,85 @@ def replace_attention_with_hyena(model, model_type=None):
             pass
             #param.requires_grad = False
 
-    if model_type =='hyena':
-        # Replace MultiheadAttention layers with HyenaOperator
+    if model_type == 'hyena':
+        #print(to_replace)
+            # Replace EncoderBlock layers with HyenaTransformerBlock
         for name in to_replace:
             # Retrieve the module to be replaced
+            
             module = model.get_submodule(name)
-            
-            # Determine the input and output channels for replacement
-            embed_dim = module.embed_dim
-            out_channels = embed_dim  # Assuming output dims match the embed_dim for attention layers
-            
-            # Create the HyenaOperator
+            #print(module)
+            embed_dim = module.out_proj.in_features
+
+                #out_channels = embed_dim  # Assuming output dims match the embed_dim for attention layers
+            """
+            # Create the HyenaTransformerBlock
             new_hyena_module = HyenaTransformerBlock(
-            d_model=embed_dim, 
-            l_max=197,  # ViT-B16 has 197 tokens (196 patches + CLS token)
-            mlp_dim=module.dim_feedforward,  
-            dropout=0.2  # Same dropout as ViT
-        ).to(next(model.parameters()).device) 
+                    d_model=embed_dim, 
+                    l_max=197,
+                    mlp_dim=module.mlp[0].out_features,  # ViT-B16 has 197 tokens (196 patches + CLS token)
+                    dropout=0.5  # Same dropout as ViT
+            ).to(next(model.parameters()).device)
+            """
+                    # Create the HyenaTransformerBlock
+            new_hyena_module = HyenaOperator(
+                    d_model=embed_dim, 
+                    l_max=197,
+                    filter_order=32,
+                    filter_dropout=0.3,
+                    dropout=0.3,
+                    isVit=True  # Same dropout as ViT
+            ).to(next(model.parameters()).device)
+            init_hyena_operator_params(new_hyena_module)
             
-            # Replace in the parent module
+
+            # Now directly replace the layer
             parent_module = model
-            for attr in name.split('.')[:-1]:  # Navigate to the parent module
-                parent_module = getattr(parent_module, attr)
-            setattr(parent_module, name.split('.')[-1], new_hyena_module)
+                #parent_module = getattr(parent_module, "Vit."+name)
+            parts = name.split('.')
+               # print(name)
+            target_layer_name = parts[-1]
+            for i, part in enumerate(parts[:-1]):  # Traverse all but the last part (which is the layer to replace)
+                parent_module = getattr(parent_module, part)  # Get the next submodule
+                    #print(f"Traversing to: {part}")  # Debugging: Show where we are in the model
+
+                    # Check the next part and print it for matching
+                if i + 1 < len(parts):
+                    next_part = parts[i + 1]
+                        #print(f"Next part to check: {next_part}") 
+                       
+                    if(next_part == target_layer_name):
+                           #print("MATCHING")
+                        break
+                                
+            #print(parent_module)
+            #print("Target layer : "  + target_layer_name)
+            setattr(parent_module, target_layer_name, new_hyena_module)
+               # print(f"Replaced {name.split('.')[-1]} with new Hyena layer")
         # Reset the weights of the attention (SE) layers
     for name, module in model.named_modules():
 
-        if isinstance(module, nn.TransformerEncoderLayer) or 'head' in name :  # Only target SE layers
+        if  re.fullmatch(r'.*\.encoder_layer_\d+.self_attention', name):# or 'head' in name : #re.fullmatch(r'.*\.encoder_layer_\d+.self_attention', name) or  # Only target SE layers
+           # return model
 
                # print(f'Replaced {name} with SEBasicHyenaBlock')
-            for param in module.parameters():
+            for param_name, param in module.named_parameters():
                
                 if param.requires_grad:  # Ensure it is trainable
-                    pass
-                    #if param.dim() > 1:
-                    #    torch.nn.init.kaiming_normal_(param)  # Reset weights (for Conv, Linear layers)
-                   # else:
-                    #    torch.nn.init.zeros_(param)  # Reset biases
-                    if param.dim() == 1:  # For BatchNorm biases
-                        torch.nn.init.normal_(param, mean=1, std=0.02)
-                    elif param.dim() < 1:  # For other layers, zero init (biases)
-                        torch.nn.init.zeros_(param)
+           
+                    if param.dim() > 1:  # Weights (e.g., Linear, Conv layers)
+                        nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+                    elif param.dim() == 1:  # Biases (e.g., Linear, Conv, BatchNorm)
+                        if 'bias' in param_name:  # Initialize biases to zero
+                            nn.init.zeros_(param)
+                        elif 'weight' in param_name and isinstance(module, nn.BatchNorm1d):  # BatchNorm weights
+                            nn.init.ones_(param)
+                        elif 'weight' in param_name and isinstance(module, nn.LayerNorm):  # LayerNorm weights
+                            nn.init.ones_(param)
+                        else:
+                        # Handle other 1D parameters (e.g., custom layers)
+                            nn.init.normal_(param, mean=0, std=0.02)  # Example initialization
+
     # Freeze all parameters except the HyenaOperator layers
  
 
@@ -255,55 +353,107 @@ def get_input_output_from_bottleneck(block):
     
     return first_input_channels, last_output_channels
 
-def weights_initz(m):
-    if isinstance(m, nn.Conv2d):
-        torch.nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            torch.nn.init.zeros_(m.bias)
-    elif isinstance(m, nn.BatchNorm2d):
-        m.weight.data.fill_(1)
-        m.bias.data.zero_()
-    elif isinstance(m, nn.Linear):
-        n = m.weight.size(1)
-        m.weight.data.normal_(0, 0.01)
-        m.bias.data.zero_()
+def initialize_weights(model):
+    """
+    Initialize the weights of the model using Kaiming initialization.
+    """
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d):
+            # Kaiming initialization for convolutional layers
+            init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            # Initialize BatchNorm weights to 1 and biases to 0
+            init.constant_(m.weight, 1)
+            init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Linear):
+            # Kaiming initialization for fully connected layers
+            init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                init.constant_(m.bias, 0)
            
 def ViT_experiments(dataset, train_loader, val_loader, listOfImages):
-    ViT = Vit(preTrained=True).to(DEVICE)
+    ViT = Vit(preTrained=True,classNumber=NUM_CLASSES).to(DEVICE)
     ViT = replace_attention_with_hyena(ViT, 'model')
+
     model = get_model(ViT, "ViT", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
-
-    hyena_ViT = Vit(preTrained=True).to(DEVICE)
-  
+    
+    hyena_ViT =  Vit(preTrained=True,classNumber=NUM_CLASSES).to(DEVICE) 
+    
     hyena_ViT = replace_attention_with_hyena(hyena_ViT, 'hyena').to('cuda')
-  
+    #initialize_weights(hyena_ViT)
+
     model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
-
-    validate(model, val_loader, LOSS)
-    validate(model_hyena, val_loader, HYENA_LOSS)
     
-    plot_metrics("ViT", "ViT_with_Hyena",output_dir=OUTPUT_DIR)
-    get_median_time("ViT", "ViT_with_Hyena")
+    input_tensor = torch.randn(1, 3, 224, 224).to(DEVICE)   # Example input
 
-    target_layer = [model.ViT.encoder.layers[-3].ln_1,model.ViT.encoder.layers[-2].ln_1,model.ViT.encoder.layers[-1].ln_1]
-    #hyena_target_layer = [model_hyena.ViT.encoder.layers[-3].ln_1,model_hyena.ViT.encoder.layers[-2].ln_1,model_hyena.ViT.encoder.layers[-1].ln_1]
+    # Measure attention-based ViT
+    print("Attention ViT VRAM usage:")
+    attention_mem = measure_vram_usage(model, input_tensor)
+    print(f"{attention_mem:.2f} MB")
+
+    # Measure Hyena-based ViT
+    print("\nHyena ViT VRAM usage:")
+    hyena_mem = measure_vram_usage(model_hyena, input_tensor)
+    print(f"{hyena_mem:.2f} MB")
+
+    #validate(model, train_loader, LOSS)
+    #validate(model, val_loader, LOSS)
+    #validate(model_hyena, train_loader, HYENA_LOSS)
+    #validate(model_hyena, val_loader, HYENA_LOSS)
     
-    for imagepath, label in listOfImages:
-        counterfactual(model,imagepath, label)
-        counterfactual(model_hyena,imagepath, label)
+    #plot_metrics("ViT", "ViT_with_Hyena",output_dir=OUTPUT_DIR)
+    #get_median_time("ViT", "ViT_with_Hyena")
+    #print(model)
+    target_layer = [model.ViT.encoder.layers[0].ln_2,model.ViT.encoder.layers[len(model_hyena.ViT.encoder.layers)//2].ln_2,model.ViT.encoder.layers[-2].ln_2]
+   # print(model_hyena)
+    hyena_target_layer = [model_hyena.ViT.encoder.layers[0].ln_2,model_hyena.ViT.encoder.layers[len(model_hyena.ViT.encoder.layers)//2].ln_2 ,model_hyena.ViT.encoder.layers[-2].ln_2]
+    
+    for imagepath, label, target_classes in listOfImages:
+        
+       # counterfactual(model,imagepath, label)
+        #counterfactual(model_hyena,imagepath, label)
    
         
         #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16")
-        #calculate_Lime(model, imagepath, DEVICE, dataset, "ViT")
+        #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='noise', intensity=0.1)
+        #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='blur', intensity=0.6)
+        #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='shift', intensity=0.1)
+        
 
-     #   calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16")
-        #calculate_Lime(model_hyena, imagepath, DEVICE, dataset, "ViT_with_Hyena")
+        #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16")
+        #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16", isPerturbed=True, perturbation_type='noise', intensity=0.1)
+        #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16", isPerturbed=True, perturbation_type='blur', intensity=0.6)
+        #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16", isPerturbed=True, perturbation_type='shift', intensity=0.1)
+
+        #compare_feature_importance(
+        #    attention_model=model,
+        #    hyena_model=model_hyena,
+        #    image_path=imagepath,
+        #    original_class=label,
+        #    target_classes=target_classes
+        #)
+
+        decision_boundary_analysis( attention_model=model,
+           hyena_model=model_hyena,
+            image_path=imagepath,
+            original_class=label,
+            target_classes=target_classes
+        )
+        #hyena_result = counterfactual(model_hyena, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model_hyena,imagepath,label,target_classes)
+        #attn_result = counterfactual(model, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model,imagepath,label,target_classes)
+        #attn_diff = attn_result['visualizations']["normalized_difference"]  # Shape: (H,W,3)
+        #hyena_diff = hyena_result['visualizations']["normalized_difference"]
+        #plot_frequency_analysis(attn_diff, hyena_diff)
+
+
 
 
 def SE_experiments(dataset, train_loader, val_loader, listOfImages):
     SE = timm.create_model('seresnet33ts.ra2_in1k', pretrained=True, num_classes=NUM_CLASSES)
     pretrain_freeze_SE(SE)
-    print(SE)
+   
     #SE = SEResNet50(SEBasicBlock,NUM_CLASSES,False, dropout_rate=0.6).to(DEVICE)
     #SE = torchvision.models.resnet18()
     #SE.fc = nn.Linear(SE.fc.in_features, 257)
@@ -334,6 +484,52 @@ def SE_experiments(dataset, train_loader, val_loader, listOfImages):
     #print(model_hyena)
     for imagepath, label in listOfImages:
         
+        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE")
+        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='noise', intensity=0.05)
+        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='blur', intensity=0.5)
+        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='shift', intensity=0.1)
+
+
+        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena")
+        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,intensity=0.05)
+        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True, perturbation_type='blur',intensity=0.5)
+        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,perturbation_type='shift',intensity=0.1)
+  
+        #calculate_Lime(model_hyena, imagepath, DEVICE, dataset, "SE_with_Hyena")
+        counterfactual(model,imagepath, label)
+        counterfactual(model_hyena,imagepath, label)
+    #caluclateShap(model,val_loader, dataset.categories, target_layer, listOfImages)
+    #caluclateShap(model_hyena,val_loader, dataset.categories, hyena_target_layer, listOfImages)
+
+
+def MobileNet_experiments(dataset, train_loader, val_loader, listOfImages):
+    MobileSE = MobileNetWithSE(NUM_CLASSES, 3, IMAGE_SIZE)
+    initialize_weights(MobileSE)
+    MobileSE.to(DEVICE)
+    
+    model = get_model(MobileSE, "MobileSE", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
+
+    MobileSE_Hyena = MobileNetWithHyena(NUM_CLASSES,3, IMAGE_SIZE)
+    initialize_weights(MobileSE_Hyena)
+    MobileSE_Hyena.to(DEVICE)
+    model_hyena = get_model(MobileSE_Hyena, "MobileSE_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
+
+    validate(model, val_loader, LOSS)
+    validate(model_hyena, val_loader, HYENA_LOSS)
+    
+    plot_metrics("MobileSE", "MobileSE_Hyena",output_dir=OUTPUT_DIR)
+    get_median_time("MobileSE", "MobileSE_Hyena")
+    
+    #check_class_predictions_by_index(model, train_loader, NUM_CLASSES, DEVICE ,"SE", "training")
+    #check_class_predictions_by_index(model, val_loader, NUM_CLASSES, DEVICE, "SE", "validation")
+    #check_class_predictions_by_index(model_hyena, train_loader, NUM_CLASSES, DEVICE, "SE_Hyena", "training")
+    #check_class_predictions_by_index(model_hyena, val_loader, NUM_CLASSES, DEVICE, "SE_Hyena", "validation")
+    #target_layer = [model.stages[0][1].attn, model.stages[1][1].attn,model.stages[2][1].attn,model.stages[3][1].attn]
+    #hyena_target_layer = [model_hyena.stages[0][1].attn,model_hyena.stages[1][1].attn,model_hyena.stages[2][1].attn,model_hyena.stages[3][1].attn]
+
+    #print(model_hyena)
+    for imagepath, label in listOfImages:
+        pass
         #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE")
         #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='noise', intensity=0.04)
         #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='blur', intensity=1.1)
@@ -347,8 +543,8 @@ def SE_experiments(dataset, train_loader, val_loader, listOfImages):
         #calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,perturbation_type='shift',intensity=0.1)
   
         #calculate_Lime(model_hyena, imagepath, DEVICE, dataset, "SE_with_Hyena")
-        counterfactual(model,imagepath, label)
-        counterfactual(model_hyena,imagepath, label)
+       # counterfactual(model,imagepath, label)
+       # counterfactual(model_hyena,imagepath, label)
     #caluclateShap(model,val_loader, dataset.categories, target_layer, listOfImages)
     #caluclateShap(model_hyena,val_loader, dataset.categories, hyena_target_layer, listOfImages)
 
@@ -372,9 +568,11 @@ def AA_experiments(dataset, train_loader, val_loader, listOfImages):
 
     
     #validate(model, train_loader, LOSS)
-   # validate(model, val_loader, LOSS)
-   # validate(model_hyena, train_loader, HYENA_LOSS)
-   # validate(model_hyena, val_loader, HYENA_LOSS)
+    #validate(model, val_loader, LOSS)
+    #validate(model_hyena, train_loader, HYENA_LOSS)
+    #validate(model_hyena, val_loader, HYENA_LOSS)
+
+
     
     #plot_metrics("AA", "AA_with_Hyena", output_dir=OUTPUT_DIR)
    #get_median_time("AA", "AA_with_Hyena")
@@ -392,6 +590,7 @@ def AA_experiments(dataset, train_loader, val_loader, listOfImages):
 #   
     #print(model_hyena)
     for imagepath, label in listOfImages:
+        
         pass
         
         calculate_Grad_CAM(model, target_layer, imagepath, "AA","AA")
@@ -581,8 +780,29 @@ def find_class_predictions_by_index(model,model2, val_loader, num_classes, devic
 
 def test_SE(dataset, train_loader, val_loader):
     SE = SEResNet50(SEBasicBlock,NUM_CLASSES,False, dropout_rate=0.5).to(DEVICE)
-    init_weights(SE)
+    #init_weights(SE)
     optim = torch.optim.SGD(SE.parameters(), lr=1e-7, weight_decay=1e-2, momentum=0.9)
     lr_finder = LearningRateFinder(SE, LOSS, optim, train_loader)
     lr_finder.find_lr(init_lr=1e-7, final_lr=1e-1, num_iter=100)
     lr_finder.plot_lr_finder()
+
+
+
+def measure_vram_usage(model, input_tensor):
+    # Clear cache
+    torch.cuda.empty_cache()
+    
+    # Get initial memory
+    initial_mem = torch.cuda.memory_allocated()
+    
+    # Forward pass
+    output = model(input_tensor)
+    
+    # Get peak memory during forward pass
+    peak_mem = torch.cuda.max_memory_allocated()
+    
+    # Calculate memory used
+    memory_used = peak_mem - initial_mem
+    
+    # Convert to MB for readability
+    return memory_used / (1024 ** 2)  # in MB

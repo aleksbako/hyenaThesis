@@ -12,7 +12,7 @@ class SE_Block_Hyena(nn.Module):
             order=2,  # Depth of Hyena recurrence (can be tuned)
             filter_order=filter_order,  # Filter order (can be tuned)
             dropout=0.3,
-            filter_dropout=0.4
+            filter_dropout=0.3
         )
 
     def forward(self, x):

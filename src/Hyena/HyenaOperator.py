@@ -71,7 +71,7 @@ class HyenaOperator(nn.Module):
 
         y = self.out_proj(y)
         if self.isVit:
-            return y, k
+            return y, None
         return y
 
     

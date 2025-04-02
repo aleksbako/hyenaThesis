@@ -13,7 +13,7 @@ class Hyena_AugmentedConv(nn.Module):
 
         self.hyena = HyenaOperator(
             d_model=in_channels,
-            l_max=out_channels,  # Will adjust based on input spatial dimensions
+            l_max=1024,  # Will adjust based on input spatial dimensions
             order=order,
             dropout=dropout,
             filter_order=filter_order,

@@ -12,7 +12,7 @@ class Hyena_WideBasic(nn.Module):
             order=order,
             dropout=dropout_rate,
             stride=stride,
-            filter_dropout=0.0
+            filter_dropout=dropout_rate
         )
         self.dropout = nn.Dropout(p=dropout_rate)
         
@@ -23,7 +23,7 @@ class Hyena_WideBasic(nn.Module):
             order=order,
             dropout=dropout_rate,
             stride=stride,
-            filter_dropout=0.0
+            filter_dropout=dropout_rate
         )
         
         self.shortcut = nn.Sequential()
@@ -34,7 +34,7 @@ class Hyena_WideBasic(nn.Module):
                     out_channels=planes,
                     order=order,
                     stride=stride,
-                    filter_dropout=0.1
+                    filter_dropout=dropout_rate
                 )
             )
 

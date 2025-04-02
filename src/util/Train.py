@@ -7,7 +7,7 @@ from .Validation import validate
 from datetime import  timedelta
 from sklearn.metrics import classification_report
 import re
-
+import psutil
 def pretrain_unfreeze_all(model):
     # Freeze all layers except SE (attention layers)
     for name, param in model.named_parameters():
@@ -114,7 +114,7 @@ def unfreeze_layers(model, stage_num, total_stages):
         layers_to_unfreeze = stage_num - 1
     else:  # After epoch 40 (stage 8+), unfreeze 2 layers per stage
         layers_to_unfreeze = 5 + (stage_num - 5) * 2  # 7 layers before epoch 40, then 2 per stage
-
+    
 
 
      # Ensure we don't exceed the number of encoder layers
@@ -128,19 +128,117 @@ def unfreeze_layers(model, stage_num, total_stages):
             print(f'unfreezing encoder layer {i}')
             param.requires_grad = True
 
-def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,scheduler, epochs=32, start_epoch=0, epoch_times=[], epoch_val_times=[], mean_train_loss=[], mean_train_accuracy=[],mean_val_loss=[], mean_val_accuracy=[] ,best_accuracy=0, best_precision=0,unfreeze_stage_interval=5):
+
+def unfreeze_layers_vit(model, stage_num):
+    """
+    Progressively unfreezes ViT layers for fine-tuning.
+
+    Args:
+        model (nn.Module): The Vision Transformer model.
+        stage_num (int): Current training stage.
+    """
+    # Step 1: Freeze everything initially
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Always unfreeze the classifier head first
+    for param in model.ViT.heads.parameters():
+        print('Unfreezing classifier head')
+        param.requires_grad = True
+
+    # Get the encoder layers
+    encoder_layers = list(model.ViT.encoder.layers)
+    num_encoder_layers = len(encoder_layers)
+
+    if stage_num == 0:
+        print("Stage 0: Training classifier head only")
+        return
+
+    elif stage_num == 1:
+        print("Stage 1: Unfreezing mid-level encoder blocks (6-11)")
+        for i in range(6, num_encoder_layers):
+            for param in encoder_layers[i].parameters():
+                param.requires_grad = True
+
+    elif stage_num >= 2:
+        print("Stage 2: Unfreezing all encoder layers")
+        for i in range(num_encoder_layers):
+            for param in encoder_layers[i].parameters():
+                param.requires_grad = True
+
+        # Optionally unfreeze the patch embedding layer
+        for param in model.ViT.conv_proj.parameters():
+            param.requires_grad = True
+
+def unfreeze_self_attention_first(model, stage_num, total_stages):
+    """
+    First fine-tunes only the HyenaOperator layers of the encoders,
+    then progressively unfreezes the rest of the model after the HyenaOperator is stabilized.
+
+    Args:
+        model (nn.Module): The transformer model.
+        stage_num (int): Current stage (based on epoch number).
+        total_stages (int): Total number of unfreezing stages.
+    """
+    # Freeze the entire model initially
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Always unfreeze the classification head
+    for param in model.ViT.heads.parameters():
+        if not param.requires_grad:
+            print('Unfreezing head')
+            param.requires_grad = True
+
+    # Get encoder layers
+    encoder_layers = list(model.ViT.encoder.layers)
+    num_encoder_layers = len(encoder_layers)
+
+    # Stage 0: Unfreeze only the HyenaOperator in all encoder layers
+    if stage_num == 0:
+        for i in range(num_encoder_layers):
+            for param in encoder_layers[i].self_attention.parameters():
+                if not param.requires_grad:
+                    print(f'Unfreezing HyenaOperator in encoder layer {i}')
+                    param.requires_grad = True
+
+    # Subsequent stages: Gradually unfreeze the rest of the model
+    elif stage_num > 0:
+        # Unfreeze 2 encoder layers per stage (including their HyenaOperator and other components)
+        layers_to_unfreeze = min(stage_num, num_encoder_layers)
+        for i in range(layers_to_unfreeze):
+            for param in encoder_layers[i].parameters():  # Unfreeze entire encoder layer
+                param.requires_grad = True
+
+        # Unfreeze the patch embedding layer (conv_proj) after all encoder layers are unfrozen
+        if stage_num >= num_encoder_layers/3:
+            for param in model.ViT.conv_proj.parameters():
+                if not param.requires_grad:
+                    print('Unfreezing conv_proj')
+                    param.requires_grad = True
+
+def train(model, train_dataloader, val_dataloader, loss,
+           optimizer,model_type,scheduler, epochs=32, start_epoch=0, epoch_times=[], epoch_val_times=[],
+             mean_train_loss=[], mean_train_accuracy=[],mean_val_loss=[], mean_val_accuracy=[] ,best_accuracy=0, best_precision=0,unfreeze_stage_interval=10):
 
     train_losses = []
     val_losses = []
     prev_stage_num = -1
-
+    #4 for SE and AA
+    
     for epoch in range(start_epoch, epochs):
         stage_num = (epoch // unfreeze_stage_interval)  # Determines which stage we're at based on the epoch number
         
         if stage_num != prev_stage_num:
             
             if 'ViT' in model_type:
-                unfreeze_layers(model,stage_num, epochs // unfreeze_stage_interval)
+                #unfreeze_layers_vit(model,stage_num)
+                #unfreeze_layers(model,stage_num, epochs // unfreeze_stage_interval)
+                unfreeze_self_attention_first(model,stage_num, epochs // unfreeze_stage_interval)
+                if(stage_num == 1):
+                    unfreeze_stage_interval = 5
+            elif 'Mobile' in model_type:
+                pass
             else:
                 unfreeze_layers_SE(model, stage_num)  # Update layers based on the current stage
             prev_stage_num = stage_num  # Update the previous stage number    
@@ -160,25 +258,52 @@ def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,sc
             label = data[1].to("cuda")
     
             pred_label = model(image)
-            pred_label = torch.clamp(pred_label, min=-1e6, max=1e6)  # Avoid extreme values
+            #pred_label = torch.clamp(pred_label, min=-1e6, max=1e6)  # Avoid extreme values
 
             current_loss = loss(pred_label, label)
             
             current_loss.backward()
 
+            def log_param_changes(model, min_threshold=0.001, max_threshold=0.05):
+                changes = {}
+                
+                # Store pre-update weights
+                for name, param in model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        changes[name] = {"before": param.clone().detach()}
+
+                optimizer.step()  # Apply gradient update
+
+                # Compare post-update weights
+                for name, param in model.named_parameters():
+                    if name in changes:
+                        changes[name]["after"] = param.clone().detach()
+                        change_magnitude = (changes[name]["after"] - changes[name]["before"]).norm().item()
+                        
+                        # Only print if change is too small or too large
+                        if change_magnitude < min_threshold:
+                            print(f"⚠️ Small Update: {name} | Change in Norm: {change_magnitude:.6f}")
+                        elif change_magnitude > max_threshold:
+                            print(f"🚨 Large Update: {name} | Change in Norm: {change_magnitude:.6f}")
+                    
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            #if epoch % 2 == 1:
             optimizer.step()
+            #else:
+             #   log_param_changes(model)
 
             _, predicted = torch.max(pred_label, 1)
             correct_predictions += (predicted == label).sum().item()
             total_samples += label.size(0)
-
+            
           #  if batch_idx % 100 == 99:  # Print every 100 batches
          #       print(f'Epoch [{epoch + 1}/{epochs}], Step [{batch_idx + 1}/{len(train_dataloader)}], '
     #  f'Loss: {current_loss.item():.4f}, Accuracy: {correct_predictions / total_samples:.4f}')
-                
-
+            print(f"{torch.cuda.max_memory_allocated()/ (1024 ** 2):.2f} MB")   
+           
             current_losses.append(np.mean(current_loss.item()))
-
+            log_memory()
         end_time = time.time()
         epoch_training_time = end_time - start_time
         epoch_times.append(epoch_training_time)
@@ -220,15 +345,50 @@ def train(model, train_dataloader, val_dataloader, loss, optimizer,model_type,sc
             'best_precision': best_precision,
             }, f"../output/{model_type}_checkpoint.pt")
         
+        filtered_train_losses = [loss if loss <= 7 else np.nan for loss in train_losses]
+        filtered_val_losses = [loss if loss <= 7 else np.nan for loss in val_losses]
+        
         plt.figure(figsize=(10, 6))
-        plt.plot(range(start_epoch, epoch+1), train_losses, label='Training Loss')
-        plt.plot(range(start_epoch, epoch+1), val_losses, label='Validation Loss')
+        plt.plot(range(start_epoch, epoch+1), filtered_train_losses, label='Training Loss')
+        plt.plot(range(start_epoch, epoch+1), filtered_val_losses, label='Validation Loss')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.title(f'{model_type} Training and Validation Loss')
         plt.legend()
         plt.grid(True)
         plt.savefig(f"../output/{model_type}_loss_curve.png")
+        plt.close()
       
     return model
-        
+
+
+def check_vanishing_gradients(model, threshold=1e-6):
+    vanishing_layers = []
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_mean = param.grad.abs().mean().item()
+            if grad_mean < threshold:
+                vanishing_layers.append((name, grad_mean))
+    
+    if vanishing_layers:
+        print("\n🔥 VANISHING GRADIENTS DETECTED:")
+        for name, gmean in sorted(vanishing_layers, key=lambda x: x[1]):
+            print(f"{name}: {gmean:.3e} (Below threshold {threshold:.1e})")
+        return True
+    return False
+def revive_gradients(model, scale=1e-3):
+    for name, param in model.named_parameters():
+        if param.grad is not None and param.grad.abs().max() < 1e-6:
+            # Inject directional noise
+            noise = torch.randn_like(param.grad) * scale
+            param.grad += noise
+            param.grad = torch.where(
+                param.grad.abs() < 1e-6,
+                param.grad * 1000,  # Forcefully amplify tiny grads
+                param.grad
+            )
+           # print(f"Revived gradients for {name}")
+
+def log_memory():
+    print(f"CPU: {psutil.virtual_memory().percent}% | "
+          f"GPU: {torch.cuda.memory_allocated()/1e9:.1f}GB")

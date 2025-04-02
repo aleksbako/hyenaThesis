@@ -5,7 +5,7 @@ import torch.nn.functional as F
 class Vit(nn.Module):
     def __init__(self, classNumber=257, preTrained=False):
         super(Vit, self).__init__()
-        self.ViT = torchvision.models.vit_b_16(pretrained=preTrained, dropout=0.4).to("cuda")
+        self.ViT = torchvision.models.vit_b_16(pretrained=preTrained, dropout=0.3).to("cuda")
         
         # Reset the weights of MultiheadAttention layers
         self.named_modules_copy = dict(self.ViT.named_modules())

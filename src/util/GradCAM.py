@@ -48,6 +48,7 @@ def apply_perturbation(image, perturbation_type="noise", intensity=0.05):
 val_transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE,IMAGE_SIZE)),
     transforms.Grayscale(num_output_channels=3),  # Resize the image to 256x256
+    #transforms.Lambda(lambda x: x.convert("RGB")),
     #transforms.CenterCrop((IMAGE_SIZE,IMAGE_SIZE)),  # Crop the center of the image to 224x224                # Resize to the same size as training set
     transforms.ToTensor(),
     transforms.Normalize(mean=MEAN, std=STD)                   
@@ -79,6 +80,7 @@ def calculate_Grad_CAM(model,target_layers, img_path, model_type, layer_name, is
 
     # Get the predicted label
     _, orignal_predicted_label = torch.max(output, 1)
+    print(orignal_predicted_label)
         # Apply perturbation if isPerturbed is True
     if isPerturbed:
         rgb_img = apply_perturbation(rgb_img, perturbation_type, intensity)
