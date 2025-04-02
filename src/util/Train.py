@@ -240,7 +240,8 @@ def train(model, train_dataloader, val_dataloader, loss,
             elif 'Mobile' in model_type:
                 pass
             else:
-                unfreeze_layers_SE(model, stage_num)  # Update layers based on the current stage
+                unfreeze_layers_SE(model, stage_num)
+                unfreeze_stage_interval=5  # Update layers based on the current stage
             prev_stage_num = stage_num  # Update the previous stage number    
             
         current_losses = []
