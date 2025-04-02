@@ -303,7 +303,7 @@ def train(model, train_dataloader, val_dataloader, loss,
             print(f"{torch.cuda.max_memory_allocated()/ (1024 ** 2):.2f} MB")   
            
             current_losses.append(np.mean(current_loss.item()))
-            log_memory()
+            #log_memory()
         end_time = time.time()
         epoch_training_time = end_time - start_time
         epoch_times.append(epoch_training_time)
