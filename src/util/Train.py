@@ -300,7 +300,7 @@ def train(model, train_dataloader, val_dataloader, loss,
           #  if batch_idx % 100 == 99:  # Print every 100 batches
          #       print(f'Epoch [{epoch + 1}/{epochs}], Step [{batch_idx + 1}/{len(train_dataloader)}], '
     #  f'Loss: {current_loss.item():.4f}, Accuracy: {correct_predictions / total_samples:.4f}')
-            print(f"{torch.cuda.max_memory_allocated()/ (1024 ** 2):.2f} MB")   
+ 
            
             current_losses.append(np.mean(current_loss.item()))
             #log_memory()
