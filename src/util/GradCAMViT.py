@@ -1,6 +1,7 @@
 import argparse
 import cv2
 import numpy as np
+import torch.nn as nn
 import torch
 import timm
 import os
@@ -18,6 +19,51 @@ from pytorch_grad_cam import GuidedBackpropReLUModel
 from pytorch_grad_cam.utils.image import show_cam_on_image, \
     preprocess_image
 from pytorch_grad_cam.ablation_layer import AblationLayerVit
+
+
+def fgsm_attack(model, image, label, epsilon):
+    """
+    Performs the Fast Gradient Sign Method (FGSM) attack.
+
+    Args:
+    - model (torch.nn.Module): The target model.
+    - image (torch.Tensor): Input image tensor (1, C, H, W).
+    - label (torch.Tensor): Correct class label.
+    - epsilon (float): Perturbation magnitude.
+
+    Returns:
+    - adversarial_image (torch.Tensor): The perturbed image.
+    - perturbation (torch.Tensor): The applied noise.
+    """
+    # Ensure the model is in evaluation mode
+    model.eval()
+
+    # Require gradient for the image
+    image = image.clone().detach().to('cuda').requires_grad_(True)
+
+    
+
+    # Forward pass to get predictions
+    output = model(image)
+    loss = nn.CrossEntropyLoss()(output, label)
+
+    # Backpropagate to get gradients
+    model.zero_grad()
+    loss.backward()
+
+    # Get sign of gradients
+    sign_data_grad = image.grad.sign()
+
+    # Create adversarial image by adding epsilon-scaled sign of the gradients
+    adversarial_image = image + epsilon * sign_data_grad
+
+    # Clip to stay within valid pixel range [0,1] if image is normalized
+    adversarial_image = torch.clamp(adversarial_image, 0, 1)
+
+    # Calculate perturbation (for visualization/debugging)
+   # perturbation = adversarial_image - image
+
+    return adversarial_image.detach() #, #perturbation.detach()
 
 
 def get_args():
@@ -86,7 +132,7 @@ def reshape_transform(tensor, height=14, width=14):
     return result
 
 
-def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name, isPerturbed=False,perturbation_type="noise", intensity=0.04):
+def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name, isPerturbed=False,perturbation_type="noise", intensity=0.04, FGSM=False):
     """ python vit_gradcam.py --image-path <path_to_image>
     Example usage of using cam-methods on a VIT network.
 
@@ -108,12 +154,16 @@ def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name
 
     # Get the predicted label
     _, orignal_predicted_label = torch.max(output, 1)
-    print(orignal_predicted_label)
+    
     if isPerturbed:
         rgb_img = apply_perturbation(rgb_img, perturbation_type, intensity)
         input_tensor = preprocess_image(rgb_img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]).float()
         input_tensor.requires_grad = True  # Ensure gradients are enabled
 
+    if FGSM:
+        adversarial_image = fgsm_attack(model,input_tensor,orignal_predicted_label,intensity)
+        input_tensor = adversarial_image
+        input_tensor.requires_grad = True
         # Forward pass through the model to get the prediction
     output = model(input_tensor.to('cuda'))
 
@@ -149,6 +199,9 @@ def calculate_vit_grad_cam(model,target_layers, img_path, model_type, layer_name
         output_filename = f'../output/grad_cam/{orignal_predicted_label.item()+1}/{model_type}_cam_layer_{idx}.jpg'
         if isPerturbed:
             output_filename = f'../output/grad_cam/{orignal_predicted_label.item()+1}/perturbation/{perturbation_type}/{model_type}_cam_layer_{idx}_perturbed_intensity_{intensity}_To_{predicted_label.item()+1}.jpg'
+        
+        if FGSM:
+            output_filename = f'../output/grad_cam/{orignal_predicted_label.item()+1}/perturbation/fgsm/{model_type}_cam_layer_{idx}_perturbed_intensity_{intensity}_To_{predicted_label.item()+1}.jpg'
         os.makedirs(os.path.dirname(output_filename), exist_ok=True)
         cv2.imwrite(output_filename, cam_image)
 

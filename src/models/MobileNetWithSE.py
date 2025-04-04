@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from modules.SEBlock import SEBlock
 class MobileNetWithSE(nn.Module):
-    def __init__(self, num_classes=100, input_channels=3, input_size=32, dropout=0.4):
+    def __init__(self, num_classes=100, input_channels=3, input_size=32, dropout=0.05):
         super(MobileNetWithSE, self).__init__()
         self.input_size = input_size 
         # Define MobileNet layers (simplified for demonstration)

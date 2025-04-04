@@ -42,7 +42,6 @@ def pretrain_freeze_SE(SE, type=None):
         for name, module in SE.named_modules():
            
             if isinstance(module, nn.Module) and name.endswith('attn'):
-     
                 print(f'Found {name} for replacement')
                 to_replace.append(name)
         for name in to_replace:
@@ -60,7 +59,8 @@ def pretrain_freeze_SE(SE, type=None):
 
 
                         # Create a new Hyena block
-            new_hyena_block = SE_Block_Hyena(in_channels, out_channels,filter_order=32)
+            new_hyena_block = SE_Block_Hyena(in_channels, out_channels,filter_order=64)
+            init_hyena_operator_params(new_hyena_block.excitation)
 
                         # Replace the attention layer in the model
              # Replace the attention layer in the model
@@ -72,7 +72,6 @@ def pretrain_freeze_SE(SE, type=None):
         
             #print(name.split('.')[-1])
             #print(parent_module)
-        
             setattr(parent_module, name.split('.')[-1], new_hyena_block)  # Repla
             #print(parent_module)
             #print('--------------------------------------------------------------------------------------------')
@@ -83,19 +82,15 @@ def pretrain_freeze_SE(SE, type=None):
 
     # Reset the weights of the attention (SE) layers
     for name, module in SE.named_modules():
-
         if name.endswith('attn') :  # Only target SE layers
-
                # print(f'Replaced {name} with SEBasicHyenaBlock')
             for param in module.parameters():
-               
-                if param.requires_grad:  # Ensure it is trainable
-                    if param.dim() > 1:  # For Conv layers
-                        torch.nn.init.kaiming_normal_(param)
-                    elif param.dim() == 1:  # For BatchNorm biases
-                        torch.nn.init.normal_(param, mean=1, std=0.02)
-                    else:  # For other layers, zero init (biases)
-                        torch.nn.init.zeros_(param)
+                #if param.dim() > 1:  # For Conv layers
+                    #torch.nn.init.kaiming_normal_(param)
+                if param.dim() == 1:  # For BatchNorm biases
+                    torch.nn.init.normal_(param, mean=1, std=0.02)
+                else:  # For other layers, zero init (biases)
+                    torch.nn.init.zeros_(param)
     for name, param in SE.named_parameters():
         if 'attn' in name or 'head' in name: 
             param.requires_grad = True
@@ -187,6 +182,8 @@ def pretrain_freeze_AA(SE, type=None):
         if type=='hyena':
                         # Create a new Hyena block
             new_block = Hyena_WideBasic(in_channels, out_channels, 0.3,16)
+            init_hyena_operator_params(new_block.conv1.hyena)
+            init_hyena_operator_params(new_block.conv2.hyena)
         else:
             new_block = WideBasic(in_channels,out_channels,0.4,shape=16).to('cuda')
                         # Replace the attention layer in the model
@@ -208,7 +205,7 @@ def pretrain_freeze_AA(SE, type=None):
         # Reset the weights of the attention (SE) layers
     for name, module in SE.named_modules():
 
-        if re.match(r'^stages\.\d+\.\d+$', name) or 'head' in name : 
+        if re.match(r'^stages\.\d+\.\d+$', name) : 
             # Only target SE layers
 
                # print(f'Replaced {name} with SEBasicHyenaBlock')
@@ -386,17 +383,17 @@ def ViT_experiments(dataset, train_loader, val_loader, listOfImages):
 
     model_hyena = get_model(hyena_ViT, "ViT_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
     
-    input_tensor = torch.randn(1, 3, 224, 224).to(DEVICE)   # Example input
+    #input_tensor = torch.randn(1, 3, 224, 224).to(DEVICE)   # Example input
 
     # Measure attention-based ViT
-    print("Attention ViT VRAM usage:")
-    attention_mem = measure_vram_usage(model, input_tensor)
-    print(f"{attention_mem:.2f} MB")
+    #print("Attention ViT VRAM usage:")
+    #attention_mem = measure_vram_usage(model, input_tensor)
+    #print(f"{attention_mem:.2f} MB")
 
     # Measure Hyena-based ViT
-    print("\nHyena ViT VRAM usage:")
-    hyena_mem = measure_vram_usage(model_hyena, input_tensor)
-    print(f"{hyena_mem:.2f} MB")
+    #print("\nHyena ViT VRAM usage:")
+    #hyena_mem = measure_vram_usage(model_hyena, input_tensor)
+    #print(f"{hyena_mem:.2f} MB")
 
     #validate(model, train_loader, LOSS)
     #validate(model, val_loader, LOSS)
@@ -420,8 +417,9 @@ def ViT_experiments(dataset, train_loader, val_loader, listOfImages):
         #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='noise', intensity=0.1)
         #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='blur', intensity=0.6)
         #calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", isPerturbed=True, perturbation_type='shift', intensity=0.1)
-        
+        calculate_vit_grad_cam(model, target_layer, imagepath, "ViT" ,"vit_base_patch16", intensity=0.001,FGSM=True)
 
+        calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16",intensity=0.001,FGSM=True)
         #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16")
         #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16", isPerturbed=True, perturbation_type='noise', intensity=0.1)
         #calculate_vit_grad_cam(model_hyena, hyena_target_layer, imagepath, "ViT_with_hyena" ,"hyena_vit_base_patch16", isPerturbed=True, perturbation_type='blur', intensity=0.6)
@@ -435,12 +433,12 @@ def ViT_experiments(dataset, train_loader, val_loader, listOfImages):
         #    target_classes=target_classes
         #)
 
-        decision_boundary_analysis( attention_model=model,
-           hyena_model=model_hyena,
-            image_path=imagepath,
-            original_class=label,
-            target_classes=target_classes
-        )
+        #decision_boundary_analysis( attention_model=model,
+        #   hyena_model=model_hyena,
+        #    image_path=imagepath,
+        #    original_class=label,
+        #    target_classes=target_classes
+        #)
         #hyena_result = counterfactual(model_hyena, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model_hyena,imagepath,label,target_classes)
         #attn_result = counterfactual(model, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model,imagepath,label,target_classes)
         #attn_diff = attn_result['visualizations']["normalized_difference"]  # Shape: (H,W,3)
@@ -451,25 +449,26 @@ def ViT_experiments(dataset, train_loader, val_loader, listOfImages):
 
 
 def SE_experiments(dataset, train_loader, val_loader, listOfImages):
-    SE = timm.create_model('seresnet33ts.ra2_in1k', pretrained=True, num_classes=NUM_CLASSES)
-    pretrain_freeze_SE(SE)
+    #SE = timm.create_model('seresnet33ts.ra2_in1k', pretrained=True, num_classes=NUM_CLASSES)
+    #pretrain_freeze_SE(SE)
    
     #SE = SEResNet50(SEBasicBlock,NUM_CLASSES,False, dropout_rate=0.6).to(DEVICE)
     #SE = torchvision.models.resnet18()
     #SE.fc = nn.Linear(SE.fc.in_features, 257)
-    SE.to(DEVICE)
+    #SE.to(DEVICE)
     
-    model = get_model(SE, "SE", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
+   # model = get_model(SE, "SE", train_loader, val_loader, LOSS, LEARNING_RATE, WEIGHT_DECAY, EPOCH)
 
     SE_Hyena = timm.create_model('seresnet33ts.ra2_in1k', pretrained=True, num_classes=NUM_CLASSES)
 
-    pretrain_freeze_SE(SE_Hyena,"hyena")
-
+    pretrain_freeze_SE(SE_Hyena, "hyena")
+    print(SE_Hyena)
     SE_Hyena.to(DEVICE)
+
     model_hyena = get_model(SE_Hyena, "SE_with_Hyena", train_loader,val_loader, HYENA_LOSS, HYENA_LEARNING_RATE, HYENA_WEIGHT_DECAY, EPOCH)
 
     #validate(model, val_loader, LOSS)
-    #validate(model_hyena, val_loader, HYENA_LOSS)
+    validate(model_hyena, val_loader, HYENA_LOSS)
     
     #plot_metrics("SE", "SE_with_Hyena",output_dir=OUTPUT_DIR)
     #get_median_time("SE", "SE_with_Hyena")
@@ -478,26 +477,47 @@ def SE_experiments(dataset, train_loader, val_loader, listOfImages):
     #check_class_predictions_by_index(model, val_loader, NUM_CLASSES, DEVICE, "SE", "validation")
     #check_class_predictions_by_index(model_hyena, train_loader, NUM_CLASSES, DEVICE, "SE_Hyena", "training")
     #check_class_predictions_by_index(model_hyena, val_loader, NUM_CLASSES, DEVICE, "SE_Hyena", "validation")
-    target_layer = [model.stages[0][1].attn, model.stages[1][1].attn,model.stages[2][1].attn,model.stages[3][1].attn]
+    #target_layer = [model.stages[0][1].attn, model.stages[1][1].attn,model.stages[2][1].attn,model.stages[3][1].attn]
     hyena_target_layer = [model_hyena.stages[0][1].attn,model_hyena.stages[1][1].attn,model_hyena.stages[2][1].attn,model_hyena.stages[3][1].attn]
 
     #print(model_hyena)
-    for imagepath, label in listOfImages:
+    for imagepath, label, target_classes in listOfImages:
         
-        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE")
-        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='noise', intensity=0.05)
-        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='blur', intensity=0.5)
-        calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='shift', intensity=0.1)
+        #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE")
+       # calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='noise', intensity=0.05)
+        #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='blur', intensity=0.5)
+        #calculate_Grad_CAM(model, target_layer, imagepath, "SE","SE", isPerturbed=True, perturbation_type='shift', intensity=0.1)
 
 
-        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena")
-        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,intensity=0.05)
-        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True, perturbation_type='blur',intensity=0.5)
-        calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,perturbation_type='shift',intensity=0.1)
+        #calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena")
+        #calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,intensity=0.05)
+        #calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True, perturbation_type='blur',intensity=0.5)
+        #calculate_Grad_CAM(model_hyena, hyena_target_layer, imagepath, "SE_with_Hyena" ,"SE_Hyena",isPerturbed=True,perturbation_type='shift',intensity=0.1)
   
-        #calculate_Lime(model_hyena, imagepath, DEVICE, dataset, "SE_with_Hyena")
-        counterfactual(model,imagepath, label)
-        counterfactual(model_hyena,imagepath, label)
+ 
+        #counterfactual(model,imagepath, label)
+        #counterfactual(model_hyena,imagepath, label)
+
+        #compare_feature_importance(
+        #    attention_model=model,
+        #    hyena_model=model_hyena,
+        #    image_path=imagepath,
+        #    original_class=label,
+        #    target_classes=target_classes
+        #)
+
+        #decision_boundary_analysis( attention_model=model,
+        #   hyena_model=model_hyena,
+        #    image_path=imagepath,
+        #    original_class=label,
+        #    target_classes=target_classes
+        #)
+        hyena_result = counterfactual(model_hyena, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model_hyena,imagepath,label,target_classes)
+        attn_result = counterfactual(model, imagepath, target_class=target_classes[0]) #class_transformation_experiment(model,imagepath,label,target_classes)
+        attn_diff = attn_result['visualizations']["normalized_difference"]  # Shape: (H,W,3)
+        hyena_diff = hyena_result['visualizations']["normalized_difference"]
+        plot_frequency_analysis(attn_diff, hyena_diff)
+        
     #caluclateShap(model,val_loader, dataset.categories, target_layer, listOfImages)
     #caluclateShap(model_hyena,val_loader, dataset.categories, hyena_target_layer, listOfImages)
 
@@ -517,8 +537,8 @@ def MobileNet_experiments(dataset, train_loader, val_loader, listOfImages):
     validate(model, val_loader, LOSS)
     validate(model_hyena, val_loader, HYENA_LOSS)
     
-    plot_metrics("MobileSE", "MobileSE_Hyena",output_dir=OUTPUT_DIR)
-    get_median_time("MobileSE", "MobileSE_Hyena")
+    #plot_metrics("MobileSE", "MobileSE_Hyena",output_dir=OUTPUT_DIR)
+    #get_median_time("MobileSE", "MobileSE_Hyena")
     
     #check_class_predictions_by_index(model, train_loader, NUM_CLASSES, DEVICE ,"SE", "training")
     #check_class_predictions_by_index(model, val_loader, NUM_CLASSES, DEVICE, "SE", "validation")
